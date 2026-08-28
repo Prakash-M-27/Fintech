@@ -25,6 +25,7 @@ import logging
 import re
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 import httpx
 
 from config import GROQ_API_KEY, MAX_TRADE_AMOUNT, SIGNAL_ACTION_THRESHOLD

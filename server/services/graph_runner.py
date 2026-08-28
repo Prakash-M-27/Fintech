@@ -20,6 +20,11 @@ from services.agent_loop import (
 
 logger = logging.getLogger(__name__)
 
+TELEMETRY_CACHE = []
+
+def get_telemetry_cache():
+    return TELEMETRY_CACHE
+
 async def run_langgraph_cycle(asset: str, event_type: str, payload: dict):
     """
     Invokes the LangGraph orchestrator and applies resulting state mutations.
@@ -64,14 +69,20 @@ async def run_langgraph_cycle(asset: str, event_type: str, payload: dict):
             for node_name, state_update in chunk.items():
                 logger.info(f"[{trace_id}] Node completed: {node_name}")
                 
-                # Emit Telemetry Event
-                await emit_market_update("agent_node_complete", {
+                event_data = {
                     "trace_id": trace_id,
                     "asset": asset,
                     "node": node_name,
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "state_update": state_update
-                })
+                }
+                
+                TELEMETRY_CACHE.insert(0, event_data)
+                if len(TELEMETRY_CACHE) > 100:
+                    TELEMETRY_CACHE.pop()
+
+                # Emit Telemetry Event
+                await emit_market_update("agent_node_complete", event_data)
                 
                 # Accumulate state
                 final_state.update(state_update)

@@ -24,6 +24,7 @@ import {
   PanelLeft,
   Pause,
   Play,
+  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -259,6 +260,19 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
     document.documentElement.classList.toggle("dark", dark);
   }, [dark]);
 
+  const [isTriggering, setIsTriggering] = useState(false);
+  const triggerAgentCycle = async () => {
+    setIsTriggering(true);
+    try {
+      const assetKey = assetKeys[asset] || "nifty";
+      await fetch(`${BACKEND}/api/agent/trigger?asset=${assetKey}`, { method: "POST" });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setTimeout(() => setIsTriggering(false), 2000);
+    }
+  };
+
   // ── Fetch agent REST data on relevant route ──────────────────────────────
   useEffect(() => {
     if (
@@ -269,14 +283,21 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
       return;
     const load = async () => {
       try {
-        const [newsRes, decRes, portRes] = await Promise.all([
+        const [newsRes, decRes, portRes, telRes] = await Promise.all([
           fetch(`${BACKEND}/api/agent/news?limit=20`),
           fetch(`${BACKEND}/api/agent/decisions?limit=20`),
           fetch(`${BACKEND}/api/agent/portfolio`),
+          fetch(`${BACKEND}/api/agent/telemetry`),
         ]);
         if (newsRes.ok) setAgentNews(await newsRes.json());
         if (decRes.ok) setAgentDecisions(await decRes.json());
         if (portRes.ok) setAgentPortfolio(await portRes.json());
+        if (telRes.ok) {
+          const telemetryData = await telRes.json();
+          if (Array.isArray(telemetryData) && telemetryData.length > 0) {
+            setAgentTelemetry(telemetryData);
+          }
+        }
       } catch (e) {
         // silently fall back to seed data if backend unavailable
       }
@@ -747,6 +768,14 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
               </div>
               <div className="flex items-center gap-2">
                 <button
+                  onClick={triggerAgentCycle}
+                  disabled={isTriggering}
+                  className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  <RefreshCw className={`size-3.5 ${isTriggering ? "animate-spin" : ""}`} />
+                  {isTriggering ? "Executing Cycle..." : "Run Agent Cycle"}
+                </button>
+                <button
                   onClick={() => setStream(!stream)}
                   className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted"
                 >
@@ -802,18 +831,16 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,.85fr)]">
                   <Section
                     eyebrow="Current decision"
-                    title="NIFTY 50 · Long bias"
+                    title={`${assets[asset].name} · ${decisionTelemetry?.action || agentDecisions[0]?.action || 'WATCH'}`}
                   >
                     <div className="border border-border bg-card p-4 md:p-5">
                       <div className="flex flex-wrap justify-between gap-4">
                         <div>
                           <p className="text-xl font-semibold">
-                            Maintain long exposure
+                            {(decisionTelemetry?.action || agentDecisions[0]?.action) === 'BUY' ? 'Initiate / Maintain Long' : (decisionTelemetry?.action || agentDecisions[0]?.action) === 'SELL' ? 'Exit / Maintain Short' : 'Observe & Maintain Cash'}
                           </p>
                           <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                            Market structure remains constructive with breadth
-                            expansion and stable volatility. No action required
-                            while validity conditions hold.
+                            {decisionTelemetry?.reasoning || agentDecisions[0]?.reasoning || 'Market structure remains constructive with breadth expansion and stable volatility. No action required while validity conditions hold.'}
                           </p>
                         </div>
                         <div className="text-right">
@@ -821,7 +848,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                             Confidence
                           </p>
                           <p className="mt-1 text-2xl font-semibold text-emerald-500">
-                            78%
+                            {decisionTelemetry ? `${Math.round(decisionTelemetry.confidence * 100)}%` : agentDecisions[0] ? `${Math.round(agentDecisions[0].confidence * 100)}%` : '78%'}
                           </p>
                         </div>
                       </div>
@@ -913,7 +940,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                       title="Prepared scenarios"
                     >
                       <div className="flex flex-col gap-2">
-                        {scenarios.map((s, i) => (
+                        {(scenariosTelemetry || scenarios).map((s: any, i: number) => (
                           <div
                             key={s.name}
                             className="border border-border bg-card"
@@ -939,10 +966,10 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                             {scenario === i && (
                               <div className="border-t border-border bg-muted/30 p-3 text-xs">
                                 <p className="text-muted-foreground">
-                                  Trigger: {s.trigger}
+                                  Trigger: {s.trigger || 'Relevance measures evidence alignment.'}
                                 </p>
                                 <p className="mt-2 font-mono uppercase tracking-wider text-emerald-500">
-                                  {s.state} · {s.action}
+                                  {s.state || 'PREPARED'} · {s.action || s.state}
                                 </p>
                               </div>
                             )}

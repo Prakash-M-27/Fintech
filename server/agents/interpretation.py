@@ -10,7 +10,7 @@ from .state import AgentState
 logger = logging.getLogger(__name__)
 
 # Initialize Groq LLM
-llm = ChatGroq(temperature=0.0, groq_api_key=GROQ_API_KEY, model_name="llama-3.1-70b-versatile")
+llm = ChatGroq(temperature=0.0, groq_api_key=GROQ_API_KEY, model_name="qwen/qwen3.6-27b")
 
 async def news_agent(state: AgentState) -> dict:
     """

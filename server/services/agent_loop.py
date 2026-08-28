@@ -486,11 +486,29 @@ async def run_agent_loop() -> None:
     except Exception as exc:
         logger.error("Agent: failed to seed capital ledger: %s", exc)
 
+    asset_list = ["nifty", "gold", "usd"]
+    asset_idx = 0
+
     while True:
         try:
             agent_state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
+            # Run news poll
             await _run_agent_cycle()
+            
+            # Continuous market telemetry cycle for active asset
+            target_asset = asset_list[asset_idx % len(asset_list)]
+            asset_idx += 1
+            from services.graph_runner import run_langgraph_cycle
+            await run_langgraph_cycle(
+                target_asset,
+                "CONTINUOUS_MONITOR",
+                {
+                    "market_data": {"price": 24200.0, "change": "+0.25%"},
+                    "news_state": {"aggregate_sentiment": "neutral", "aggregate_impact": 0.5},
+                    "positions": []
+                }
+            )
         except Exception as exc:
             logger.error("Agent loop unhandled error: %s", exc)
             agent_state["last_error"] = str(exc)
-        await asyncio.sleep(NEWS_AGENT_POLL_INTERVAL)
+        await asyncio.sleep(25)

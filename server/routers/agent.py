@@ -255,3 +255,39 @@ async def get_portfolio(db: AsyncSession = Depends(get_db)):
         capital=CapitalOut.model_validate(capital) if capital else None,
         summary=summary,
     )
+
+
+@router.get("/telemetry")
+async def get_telemetry():
+    """Returns cached node completion events."""
+    from services.graph_runner import get_telemetry_cache
+    return get_telemetry_cache()
+
+
+@router.post("/trigger")
+async def trigger_agent(asset: str = "nifty"):
+    """Manually triggers a full LangGraph agent cycle for the specified asset."""
+    from services.graph_runner import run_langgraph_cycle
+    payload = {
+        "market_data": {"price": 24200.0, "change": "+0.5%"},
+        "news_state": {
+            "articles": [
+                {
+                    "title": f"Manual trigger market update for {asset}",
+                    "source": "Axiom Real-Time Sentinel",
+                    "sentiment": "positive",
+                    "impact_score": 0.85,
+                    "confidence": 0.9,
+                    "reasoning": "Real-time decision update requested by user."
+                }
+            ],
+            "aggregate_sentiment": "positive",
+            "aggregate_impact": 0.85
+        },
+        "positions": []
+    }
+    
+    import asyncio
+    asyncio.create_task(run_langgraph_cycle(asset, "MANUAL_TRIGGER", payload))
+    return {"status": "triggered", "asset": asset}
+
