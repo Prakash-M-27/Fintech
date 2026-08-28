@@ -123,7 +123,7 @@ export function TVOverviewChart({ data }: { data: { time: string; value: number;
 
     const vwapSeries = chart.addSeries(LineSeries, {
       color: '#6366f1',
-      lineWidth: 1.5,
+      lineWidth: 2,
       lineStyle: LineStyle.Dashed,
     })
 
@@ -284,7 +284,7 @@ export function TVPriceChart({
     if (showIndicators.vwap) {
       const vwapSeries = chart.addSeries(LineSeries, {
         color: '#818cf8',
-        lineWidth: 1.5,
+        lineWidth: 2,
         lineStyle: LineStyle.Dashed,
       })
       vwapSeries.setData(formatted.map(d => ({ time: d.time as any, value: d.vwap })))
@@ -294,7 +294,7 @@ export function TVPriceChart({
     if (showIndicators.ema20) {
       const ema20Series = chart.addSeries(LineSeries, {
         color: '#f97316',
-        lineWidth: 1.5,
+        lineWidth: 2,
       })
       ema20Series.setData(formatted.map(d => ({ time: d.time as any, value: d.ema20 })))
     }
@@ -303,7 +303,7 @@ export function TVPriceChart({
     if (showIndicators.ema50) {
       const ema50Series = chart.addSeries(LineSeries, {
         color: '#c084fc',
-        lineWidth: 1.5,
+        lineWidth: 2,
       })
       ema50Series.setData(formatted.map(d => ({ time: d.time as any, value: d.ema50 })))
     }
@@ -512,14 +512,14 @@ export function TVMACDChart({ data }: { data: Candle[] }) {
     // MACD Line
     const macdSeries = chart.addSeries(LineSeries, {
       color: '#3b82f6',
-      lineWidth: 1.5,
+      lineWidth: 2,
     })
     macdSeries.setData(formatted.map(d => ({ time: d.time as any, value: d.macd })))
 
     // Signal Line
     const signalSeries = chart.addSeries(LineSeries, {
       color: '#f97316',
-      lineWidth: 1.5,
+      lineWidth: 2,
     })
     signalSeries.setData(formatted.map(d => ({ time: d.time as any, value: d.macdSignal })))
 

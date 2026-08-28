@@ -165,7 +165,7 @@ function Section({
   eyebrow: string;
   title: string;
   children: React.ReactNode;
-  action?: string;
+  action?: React.ReactNode;
 }) {
   return (
     <section>
