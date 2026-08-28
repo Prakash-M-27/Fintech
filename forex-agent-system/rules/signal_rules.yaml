@@ -1,0 +1,47 @@
+# Declarative trading rules — human-auditable, no code required.
+# The rule engine (rules/rule_engine.py) parses each entry into predicate
+# functions and returns the FIRST rule whose `when` clause all matches.
+#
+# Adding a new strategy = adding a YAML entry here — never touching agent code.
+#
+# Supported `when` predicates (all must hold for the rule to match):
+#   rsi_below:       RSI < value
+#   rsi_above:       RSI > value
+#   price_above_ma:  close > moving average (e.g. "MA20")
+#   price_below_ma:  close < moving average
+#   sentiment:       news sentiment equals this label
+#   spread_below_pips: spread < value (pips)
+#   spread_above_pips: spread > value (pips)
+
+- name: oversold_bullish_news
+  when:
+    rsi_below: 30
+    sentiment: bullish
+    spread_below_pips: 2
+  then:
+    action: BUY
+    reason: "RSI oversold + bullish news + tight spread"
+
+- name: overbought_bearish_news
+  when:
+    rsi_above: 70
+    sentiment: bearish
+  then:
+    action: SELL
+    reason: "RSI overbought + bearish news"
+
+- name: strong_uptrend
+  when:
+    price_above_ma: MA20
+    sentiment: neutral
+  then:
+    action: BUY
+    reason: "Price above 20-period MA in neutral news backdrop"
+
+- name: strong_downtrend
+  when:
+    price_below_ma: MA20
+    sentiment: neutral
+  then:
+    action: SELL
+    reason: "Price below 20-period MA in neutral news backdrop"

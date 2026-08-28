@@ -1,0 +1,27 @@
+# Core orchestration & agents
+langgraph>=1.0
+langchain-core>=1.0
+langsmith>=0.1
+
+# External connectivity (Model Context Protocol)
+mcp>=1.0
+
+# Data / indicators / math
+pandas>=2.0
+numpy>=1.26
+pandas-ta>=0.3.14b0        # indicators (RSI, MAs, etc.)
+ta>=0.11
+
+# Backtesting
+backtrader>=1.9
+
+# Storage & config
+pydantic>=2.0
+pydantic-settings>=2.0
+SQLAlchemy>=2.0
+asyncpg
+redis[hiredis]
+python-dotenv
+
+# Dev / test
+pytest>=7.0
