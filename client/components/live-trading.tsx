@@ -1,10 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  Area, AreaChart, CartesianGrid, ComposedChart, Line,
-  ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar,
-} from 'recharts'
+import { io } from 'socket.io-client'
 import {
   Activity, AlertTriangle, ArrowDownRight, ArrowUpRight,
   BarChart2, Bell, Bot, CheckCircle2, Circle, Clock,
@@ -13,6 +10,7 @@ import {
   Wallet, Zap, RefreshCw, Target,
 } from 'lucide-react'
 import { calcEMA, calcRSI, calcMACD, calcBollinger } from '@/lib/indicators'
+import { TVPriceChart, TVRSIChart, TVMACDChart } from '@/components/tv-chart'
 
 // ── types ──────────────────────────────────────────────────────────────────
 type Candle = {
@@ -69,16 +67,18 @@ const agentMessages: Record<string, string[]> = {
 }
 const tones: AgentLog['tone'][] = ['blue', 'green', 'amber', 'green', 'green']
 
-// ── seed chart with indicators ─────────────────────────────────────────────
+// ── seed chart with deterministic indicators ─────────────────────────────────
 function buildCandles(symbol: string): Candle[] {
-  const base = BASE[symbol]
+  const base = BASE[symbol] || 22458
   const prices: number[] = []
   const vols:   number[] = []
-  let v = base - rand(80, 160)
+  const fixedBaseTime = 1710000000000
+
   for (let i = 59; i >= 0; i--) {
-    v += rand(-18, 22)
+    const delta = Math.sin(i * 0.4) * 12 + Math.cos(i * 0.2) * 5
+    const v = base - 50 + (59 - i) * 1.2 + delta
     prices.push(+v.toFixed(2))
-    vols.push(Math.floor(rand(20, 90)))
+    vols.push(50 + Math.floor(Math.sin(i * 0.8) * 30))
   }
 
   const ema20arr = calcEMA(prices, 20)
@@ -88,11 +88,23 @@ function buildCandles(symbol: string): Candle[] {
   const { upper, lower, mid }  = calcBollinger(prices, 20)
 
   return prices.map((p, i) => {
-    const t = new Date(Date.now() - (59 - i) * 10000)
+    const t = new Date(fixedBaseTime + i * 10000)
+    const hours = String(t.getUTCHours()).padStart(2, '0')
+    const mins = String(t.getUTCMinutes()).padStart(2, '0')
+    const secs = String(t.getUTCSeconds()).padStart(2, '0')
+    const close = p
+    const open = i > 0 ? prices[i - 1] : +(p - 4).toFixed(2)
+    const high = +(Math.max(open, close) + Math.abs(Math.sin(i * 0.7)) * 8 + 1.5).toFixed(2)
+    const low = +(Math.min(open, close) - Math.abs(Math.cos(i * 0.7)) * 8 - 1.5).toFixed(2)
+
     return {
-      time:       t.toLocaleTimeString('en-IN', { hour12: false }),
+      time:       `${hours}:${mins}:${secs}`,
       value:      p,
-      vwap:       +(p - rand(2, 8)).toFixed(2),
+      open,
+      high,
+      low,
+      close,
+      vwap:       +(p - 3.5).toFixed(2),
       vol:        vols[i],
       ema20:      ema20arr[i],
       ema50:      ema50arr[i],
@@ -290,8 +302,156 @@ export default function LiveTradingPage() {
   const orderId = useRef(100)
   const aiTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // symbol change → rebuild candles
-  useEffect(() => { setCandles(buildCandles(symbol)) }, [symbol])
+  const symbolToAssetKey: Record<string, string> = {
+    'NIFTY 50': 'nifty',
+    'BANKNIFTY': 'nifty',
+    'SENSEX': 'nifty',
+    'GOLD': 'gold',
+    'USD/INR': 'usd',
+  }
+
+  // symbol change → rebuild candles & subscribe to real socket stream
+  useEffect(() => {
+    setCandles(buildCandles(symbol))
+
+    const assetKey = symbolToAssetKey[symbol] || 'nifty'
+    const socket = io('http://localhost:8000')
+
+    socket.emit('subscribe', assetKey)
+
+    // Fetch initial history from backend
+    fetch(`http://localhost:8000/api/market/${assetKey}/history`)
+      .then(res => res.json())
+      .then(history => {
+        if (Array.isArray(history) && history.length > 0) {
+          const prices = history.map((h: any) => Number(h.price))
+          const ema20arr = calcEMA(prices, 20)
+          const ema50arr = calcEMA(prices, 50)
+          const rsiArr = calcRSI(prices, 14)
+          const { macd, signal, hist } = calcMACD(prices)
+          const { upper, lower, mid } = calcBollinger(prices, 20)
+
+          const loadedCandles: Candle[] = history.map((h: any, i: number) => ({
+            time: h.timestamp ? new Date(h.timestamp).toLocaleTimeString('en-IN', { hour12: false }) : nowT(),
+            value: Number(h.price),
+            vwap: +(Number(h.price) - rand(2, 6)).toFixed(2),
+            vol: Math.floor(rand(20, 90)),
+            ema20: ema20arr[i],
+            ema50: ema50arr[i],
+            bbUpper: upper[i],
+            bbLower: lower[i],
+            bbMid: mid[i],
+            rsi: rsiArr[i],
+            macd: macd[i],
+            macdSignal: signal[i],
+            macdHist: hist[i],
+          }))
+          setCandles(loadedCandles)
+        }
+      })
+      .catch(() => {})
+
+    // Handle real-time market updates from socket server
+    socket.on('market_update', (data: { asset?: string; price?: number; change_pct?: number; time?: string }) => {
+      if (data && data.price && (data.asset === assetKey || !data.asset)) {
+        const newPrice = Number(data.price)
+        const tickTime = data.time || nowT()
+
+        setCandles(prev => {
+          if (!prev.length) return prev
+          const last = prev[prev.length - 1]
+          const isNewCandle = tickTime !== last.time
+
+          let newPrices: number[]
+          let updated: Candle[]
+
+          if (isNewCandle) {
+            newPrices = [...prev.map(c => c.value), newPrice].slice(-60)
+          } else {
+            newPrices = [...prev.map(c => c.value).slice(0, -1), newPrice]
+          }
+
+          const ema20arr = calcEMA(newPrices, 20)
+          const ema50arr = calcEMA(newPrices, 50)
+          const rsiArr = calcRSI(newPrices, 14)
+          const { macd, signal, hist } = calcMACD(newPrices)
+          const { upper, lower, mid } = calcBollinger(newPrices, 20)
+
+          if (isNewCandle) {
+            updated = prev.map((c, i) => ({
+              ...c,
+              ema20: ema20arr[i] || c.ema20,
+              ema50: ema50arr[i] || c.ema50,
+              bbUpper: upper[i] || c.bbUpper,
+              bbLower: lower[i] || c.bbLower,
+              bbMid: mid[i] || c.bbMid,
+              rsi: rsiArr[i] || c.rsi,
+              macd: macd[i] || c.macd,
+              macdSignal: signal[i] || c.macdSignal,
+              macdHist: hist[i] || c.macdHist,
+            }))
+            const lastIdx = newPrices.length - 1
+            updated.push({
+              time: tickTime,
+              value: newPrice,
+              vwap: +(newPrice - rand(2, 6)).toFixed(2),
+              vol: Math.floor(rand(20, 90)),
+              ema20: ema20arr[lastIdx],
+              ema50: ema50arr[lastIdx],
+              bbUpper: upper[lastIdx],
+              bbLower: lower[lastIdx],
+              bbMid: mid[lastIdx],
+              rsi: rsiArr[lastIdx],
+              macd: macd[lastIdx],
+              macdSignal: signal[lastIdx],
+              macdHist: hist[lastIdx],
+            })
+            updated = updated.slice(-60)
+          } else {
+            updated = prev.map((c, i) => {
+              if (i === prev.length - 1) {
+                return {
+                  ...c,
+                  value: newPrice,
+                  ema20: ema20arr[i],
+                  ema50: ema50arr[i],
+                  bbUpper: upper[i],
+                  bbLower: lower[i],
+                  bbMid: mid[i],
+                  rsi: rsiArr[i],
+                  macd: macd[i],
+                  macdSignal: signal[i],
+                  macdHist: hist[i],
+                }
+              }
+              return {
+                ...c,
+                ema20: ema20arr[i] || c.ema20,
+                ema50: ema50arr[i] || c.ema50,
+                bbUpper: upper[i] || c.bbUpper,
+                bbLower: lower[i] || c.bbLower,
+                bbMid: mid[i] || c.bbMid,
+                rsi: rsiArr[i] || c.rsi,
+                macd: macd[i] || c.macd,
+                macdSignal: signal[i] || c.macdSignal,
+                macdHist: hist[i] || c.macdHist,
+              }
+            })
+          }
+          return updated
+        })
+
+        setPositions(prev =>
+          prev.map(p => (p.symbol === symbol ? { ...p, current: newPrice } : p))
+        )
+        setPulse(v => !v)
+      }
+    })
+
+    return () => {
+      socket.disconnect()
+    }
+  }, [symbol])
 
   // fetch AI suggestion
   const fetchSuggestion = useCallback(async (c: Candle[]) => {
@@ -321,63 +481,6 @@ export default function LiveTradingPage() {
       const data = await res.json()
       if (!data.error) setSuggestion({ ...data, loading: false })
     } catch { setSuggestion(s => s ? { ...s, loading: false } : null) }
-  }, [symbol])
-
-  // price tick every 1.5s
-  useEffect(() => {
-    const t = setInterval(() => {
-      setCandles(prev => {
-        const last  = prev[prev.length - 1]
-        const delta = rand(-14, 16)
-        const newPrices = [...prev.map(c => c.value).slice(0, -1), +(last.value + delta).toFixed(2)]
-        const ema20arr  = calcEMA(newPrices, 20)
-        const ema50arr  = calcEMA(newPrices, 50)
-        const rsiArr    = calcRSI(newPrices, 14)
-        const { macd, signal, hist } = calcMACD(newPrices)
-        const { upper, lower, mid }  = calcBollinger(newPrices, 20)
-        const updated = prev.map((c, i) => ({
-          ...c,
-          value:      newPrices[i],
-          vwap:       +(newPrices[i] - rand(2, 8)).toFixed(2),
-          vol:        Math.floor(rand(20, 90)),
-          ema20:      ema20arr[i],
-          ema50:      ema50arr[i],
-          bbUpper:    upper[i],
-          bbLower:    lower[i],
-          bbMid:      mid[i],
-          rsi:        rsiArr[i],
-          macd:       macd[i],
-          macdSignal: signal[i],
-          macdHist:   hist[i],
-        }))
-        // append new candle every ~10s
-        const nowStr = nowT()
-        if (nowStr !== last.time) {
-          const np = +(last.value + delta).toFixed(2)
-          const allP = [...newPrices, np]
-          updated.push({
-            time: nowStr, value: np,
-            vwap: +(np - rand(2,8)).toFixed(2), vol: Math.floor(rand(20,90)),
-            ema20: calcEMA(allP,20)[allP.length-1],
-            ema50: calcEMA(allP,50)[allP.length-1],
-            bbUpper: calcBollinger(allP,20).upper[allP.length-1],
-            bbLower: calcBollinger(allP,20).lower[allP.length-1],
-            bbMid:   calcBollinger(allP,20).mid[allP.length-1],
-            rsi:     calcRSI(allP,14)[allP.length-1],
-            macd:    calcMACD(allP).macd[allP.length-1],
-            macdSignal: calcMACD(allP).signal[allP.length-1],
-            macdHist:   calcMACD(allP).hist[allP.length-1],
-          })
-          return updated.slice(-60)
-        }
-        return updated
-      })
-      setPositions(prev => prev.map(p =>
-        p.symbol === symbol ? { ...p, current: +(p.current + rand(-10, 12)).toFixed(2) } : p
-      ))
-      setPulse(v => !v)
-    }, 1500)
-    return () => clearInterval(t)
   }, [symbol])
 
   // AI refresh every 30s
@@ -492,61 +595,66 @@ export default function LiveTradingPage() {
             {/* left */}
             <div className="flex flex-col gap-4">
 
-              {/* chart card */}
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                {/* chart tabs + indicator toggles */}
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex gap-1">
+              {/* professional trading chart card */}
+              <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                {/* chart control toolbar */}
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
+                  <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
                     {(['price','rsi','macd'] as const).map(tab => (
                       <button key={tab} onClick={() => setActiveTab(tab)}
-                        className={`rounded px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors ${
-                          activeTab === tab ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700'
+                        className={`rounded px-3 py-1 font-mono text-xs font-medium transition-all ${
+                          activeTab === tab ? 'bg-white text-gray-900 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-900'
                         }`}>
-                        {tab === 'price' ? 'Price' : tab.toUpperCase()}
+                        {tab === 'price' ? 'Candlestick Chart' : tab.toUpperCase()}
                       </button>
                     ))}
                   </div>
+
                   {activeTab === 'price' && (
-                    <div className="flex gap-2">
-                      {([['ema20','EMA20','text-orange-500'],['ema50','EMA50','text-purple-500'],['bb','BB','text-gray-400'],['vwap','VWAP','text-indigo-500']] as const).map(([k, label, color]) => (
-                        <button key={k} onClick={() => setShowIndicators(s => ({ ...s, [k]: !s[k as keyof typeof s] }))}
-                          className={`rounded border px-2 py-0.5 font-mono text-[9px] transition-colors ${
-                            showIndicators[k as keyof typeof showIndicators] ? `border-current ${color}` : 'border-gray-200 text-gray-300'
-                          }`}>
-                          {label}
-                        </button>
-                      ))}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mr-1">Overlays:</span>
+                      {([['ema20','EMA 20','#f97316'],['ema50','EMA 50','#c084fc'],['bb','Bollinger Bands','#94a3b8'],['vwap','VWAP','#818cf8']] as const).map(([k, label, colorHex]) => {
+                        const active = showIndicators[k as keyof typeof showIndicators]
+                        return (
+                          <button key={k} onClick={() => setShowIndicators(s => ({ ...s, [k]: !s[k as keyof typeof s] }))}
+                            className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] transition-all border ${
+                              active ? 'bg-gray-900 text-white border-gray-900' : 'bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-300'
+                            }`}>
+                            <span className="size-1.5 rounded-full" style={{ backgroundColor: active ? colorHex : '#cbd5e1' }} />
+                            {label}
+                          </button>
+                        )
+                      })}
                     </div>
                   )}
-                  <span className="flex items-center gap-1 font-mono text-[10px] text-emerald-500">
-                    <Activity className="size-3" /> Live
-                  </span>
+
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 font-mono text-[10px] text-emerald-600 border border-emerald-200/60 font-semibold">
+                      <Activity className="size-3 animate-pulse" /> WebSocket Live
+                    </span>
+                  </div>
                 </div>
 
+                {/* chart canvas view */}
                 {activeTab === 'price' && (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <ComposedChart data={candles} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
-                      <defs>
-                        <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#10b981" stopOpacity={0.15} />
-                          <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid stroke="#f5f5f5" strokeDasharray="2 4" vertical={false} />
-                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} interval="preserveStartEnd" />
-                      <YAxis domain={['auto','auto']} tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={72} />
-                      <Tooltip content={<ChartTooltip />} />
-                      {showIndicators.bb && <Area type="monotone" dataKey="bbUpper" stroke="#d1d5db" strokeWidth={1} fill="none" dot={false} isAnimationActive={false} strokeDasharray="3 3" />}
-                      {showIndicators.bb && <Area type="monotone" dataKey="bbLower" stroke="#d1d5db" strokeWidth={1} fill="none" dot={false} isAnimationActive={false} strokeDasharray="3 3" />}
-                      <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#pg)" dot={false} isAnimationActive={false} />
-                      {showIndicators.vwap  && <Line type="monotone" dataKey="vwap"  stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} strokeDasharray="4 3" />}
-                      {showIndicators.ema20 && <Line type="monotone" dataKey="ema20" stroke="#f97316" strokeWidth={1.5} dot={false} isAnimationActive={false} />}
-                      {showIndicators.ema50 && <Line type="monotone" dataKey="ema50" stroke="#a855f7" strokeWidth={1.5} dot={false} isAnimationActive={false} />}
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                  <TVPriceChart data={candles} showIndicators={showIndicators} />
                 )}
-                {activeTab === 'rsi'  && <><p className="mb-1 font-mono text-[9px] text-gray-400">RSI (14) — Overbought &gt;70 · Oversold &lt;30</p><RSIPanel  data={candles} /></>}
-                {activeTab === 'macd' && <><p className="mb-1 font-mono text-[9px] text-gray-400">MACD (12,26,9) — Blue: MACD · Orange: Signal · Green: Histogram</p><MACDPanel data={candles} /></>}
+                {activeTab === 'rsi' && (
+                  <div className="space-y-2">
+                    <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
+                      RSI (14) Relative Strength Indicator — Overbought Zone &gt;70 · Oversold Zone &lt;30
+                    </p>
+                    <TVRSIChart data={candles} />
+                  </div>
+                )}
+                {activeTab === 'macd' && (
+                  <div className="space-y-2">
+                    <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
+                      MACD (12,26,9) Moving Average Convergence Divergence — Blue: MACD · Orange: Signal · Green/Red: Histogram
+                    </p>
+                    <TVMACDChart data={candles} />
+                  </div>
+                )}
               </div>
 
               {/* agent pipeline */}
