@@ -13,10 +13,10 @@ async def outcome_agent(state: AgentState) -> dict:
     
     # In Phase 1, PnL is tracked in the pipeline via price ticks. 
     # Here we just record that an outcome assessment was made.
-    outcomes = state.get("outcomes", [])
+    outcomes = state.get("outcomes") or []
     
     current_decision = state.get("current_decision")
-    if current_decision and state.get("execution_state", {}).get("filled"):
+    if current_decision and (state.get("execution_state") or {}).get("filled"):
         outcomes.append({
             "decision_version": state.get("decision_version"),
             "action": current_decision["action"],
@@ -33,7 +33,7 @@ async def adaptation_agent(state: AgentState) -> dict:
     """
     logger.info(f"[{state['trace_id']}] Running Adaptation Agent for {state['asset']}")
     
-    adaptation_state = state.get("adaptation_state", {})
+    adaptation_state = state.get("adaptation_state") or {}
     
     # Placeholder for Phase 1 adaptation logic
     # Real implementation would adjust signal reliability based on outcome success.
