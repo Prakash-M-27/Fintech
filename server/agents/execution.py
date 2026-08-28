@@ -92,6 +92,11 @@ async def execution_agent(state: AgentState) -> dict:
         "filled": False
     }
     
+    if state.get("event_type") == "CONTINUOUS_MONITOR":
+        execution_state["status"] = "REALTIME_MONITOR_EXEMPT"
+        execution_state["filled"] = False
+        return {"execution_state": execution_state}
+
     if action in ("BUY", "SELL", "EXIT"):
         execution_state["status"] = "PENDING_DB_FLUSH"
         execution_state["filled"] = True
