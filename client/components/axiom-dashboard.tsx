@@ -54,6 +54,7 @@ import {
   MarketStatusInfo,
 } from "@/lib/market-status";
 import { io } from "socket.io-client";
+import { TVOverviewChart } from '@/components/tv-chart';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
@@ -243,6 +244,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
   const [agentPortfolio, setAgentPortfolio] = useState<any>(null);
   const [agentSignals, setAgentSignals] = useState<any[]>([]); // real-time socket feed
   const [agentEvents, setAgentEvents] = useState<any[]>([]); // real-time decision feed
+  const [agentTelemetry, setAgentTelemetry] = useState<any[]>([]); // LangGraph node stream
 
   useEffect(() => {
     const updateStatus = () => {
@@ -311,6 +313,11 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
           },
         }));
       }
+    });
+
+    // New: LangGraph telemetry stream
+    socket.on("agent_node_complete", (data) => {
+      setAgentTelemetry((prev) => [data, ...prev].slice(0, 50));
     });
 
     // New: classified news signals from the agent
@@ -517,7 +524,49 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
         ["USD", "AVOID", "31", "67", "Moderate", "—", "₹0", "₹0", "Rejected"],
       ];
 
+  // Execution: from live decisions
+  const liveExecutionRows: string[][] = agentDecisions.length
+    ? agentDecisions
+        .slice(0, 10)
+        .map((d: any) => [
+          new Date(d.created_at).toLocaleTimeString("en-IN"),
+          (d.asset || "").toUpperCase(),
+          d.action,
+          "—",
+          `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
+          d.action === "BUY" ? liveData[d.asset]?.price || "—" : "—",
+          "0.00%",
+          "₹0",
+          `#${d.id}`,
+          d.action === "BUY" ? "FILLED" : d.action === "HOLD" ? "NO ACTION" : "REJECTED",
+        ])
+    : [
+        ["14:28:44", "GOLD", "BUY", "2", "72,410", liveData.gold.price, "0.01%", "₹18", "#142", "FILLED"],
+        ["14:16:50", "NIFTY", "HOLD", "—", "—", "—", "—", "—", "#143", "NO ACTION"],
+        ["13:14:21", "USD/INR", "BUY", "—", "83.42", "—", "—", "—", "#139", "REJECTED"],
+      ];
+
+  // Outcomes: from live closed positions
+  const liveOutcomesRows: string[][] = agentPortfolio?.closed_positions?.length
+    ? agentPortfolio.closed_positions.slice(0, 10).map((p: any) => [
+        `#${p.decision_id}`,
+        (p.asset || "").toUpperCase(),
+        "EXIT",
+        "Target/Stop Hit",
+        "Observed",
+        p.realized_pnl && Number(p.realized_pnl) > 0 ? "Realized" : "Stopped",
+        `₹${Number(p.realized_pnl || 0).toFixed(2)}`,
+        "No",
+        "—",
+      ])
+    : [
+        ["#131", "NIFTY", "BUY", "Bullish breakout", "Liquidity breakdown", "Reduced", "+₹840", "Yes", "Liquidity collapsed faster"],
+        ["#128", "GOLD", "BUY", "Trend continuation", "Trend continuation", "Realized", "+₹2,240", "No", "—"],
+        ["#124", "USD", "AVOID", "Risk-off", "Risk-off", "Avoided", "₹0", "No", "—"],
+      ];
+
   const pageRows: Record<string, { headers: string[]; rows: string[][] }> = {
+
     "/positions": {
       headers: [
         "Asset",
@@ -546,44 +595,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
         "Version",
         "Status",
       ],
-      rows: [
-        [
-          "14:28:44",
-          "GOLD",
-          "BUY",
-          "2",
-          "72,410",
-          liveData.gold.price,
-          "0.01%",
-          "₹18",
-          "#142",
-          "FILLED",
-        ],
-        [
-          "14:16:50",
-          "NIFTY",
-          "HOLD",
-          "—",
-          "—",
-          "—",
-          "—",
-          "—",
-          "#143",
-          "NO ACTION",
-        ],
-        [
-          "13:14:21",
-          "USD/INR",
-          "BUY",
-          "—",
-          "83.42",
-          "—",
-          "—",
-          "—",
-          "#139",
-          "REJECTED",
-        ],
-      ],
+      rows: liveExecutionRows,
     },
     "/history": {
       headers: [
@@ -625,44 +637,16 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
         "Invalidated?",
         "Primary reason",
       ],
-      rows: [
-        [
-          "#131",
-          "NIFTY",
-          "BUY",
-          "Bullish breakout",
-          "Liquidity breakdown",
-          "Reduced",
-          "+₹840",
-          "Yes",
-          "Liquidity collapsed faster",
-        ],
-        [
-          "#128",
-          "GOLD",
-          "BUY",
-          "Trend continuation",
-          "Trend continuation",
-          "Realized",
-          "+₹2,240",
-          "No",
-          "—",
-        ],
-        [
-          "#124",
-          "USD",
-          "AVOID",
-          "Risk-off",
-          "Risk-off",
-          "Avoided",
-          "₹0",
-          "No",
-          "—",
-        ],
-      ],
+      rows: liveOutcomesRows,
     },
   };
   const generic = pageRows[route];
+
+  const decisionTelemetry = agentTelemetry.find(t => t.node === 'reasoning_decision')?.state_update?.current_decision;
+  const signalFusion = agentTelemetry.find(t => t.node === 'interpretation_regime')?.state_update?.signal_fusion || agentTelemetry.find(t => t.node === 'reasoning_decision')?.state_update?.signal_fusion;
+  const scenariosTelemetry = agentTelemetry.find(t => t.node === 'reasoning_scenario')?.state_update?.scenarios;
+  const riskTelemetry = agentTelemetry.find(t => t.node === 'risk')?.state_update?.risk_state;
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur md:px-6">
@@ -1143,69 +1127,78 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                 <Section eyebrow="Runtime · active" title="Agent orchestration">
                   <div className="grid gap-3 md:grid-cols-4">
                     {[
-                      "Observe",
-                      "Interpret",
-                      "Reason",
-                      "Risk",
-                      "Allocate",
-                      "Execute",
-                      "Outcome",
-                      "Adapt",
-                    ].map((s, i) => (
+                      { id: "observation_market", label: "Market Data" },
+                      { id: "observation_technical", label: "Technical State" },
+                      { id: "observation_liquidity", label: "Liquidity" },
+                      { id: "interpretation_news", label: "News Intelligence" },
+                      { id: "interpretation_regime", label: "Market Regime" },
+                      { id: "reasoning_decision", label: "Decision Engine" },
+                      { id: "reasoning_scenario", label: "Scenario Builder" },
+                      { id: "risk", label: "Risk Limits" },
+                      { id: "capital", label: "Capital Match" },
+                      { id: "execution", label: "Execution" },
+                      { id: "outcome", label: "Outcome Tracking" },
+                      { id: "adaptation", label: "Adaptation" },
+                    ].map((node, i) => {
+                      const telemetry = agentTelemetry.find(t => t.node === node.id);
+                      const isActive = telemetry !== undefined;
+                      const isRecent = isActive && (Date.now() - new Date(telemetry.ts).getTime()) < 5000;
+                      
+                      return (
                       <button
-                        key={s}
-                        className={`border p-4 text-left ${i === 1 ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+                        key={node.id}
+                        className={`border p-4 text-left transition-all duration-500 ${isActive ? (isRecent ? "border-primary bg-primary/20 shadow-[0_0_15px_rgba(var(--primary),0.5)]" : "border-primary/50 bg-primary/10") : "border-border bg-card opacity-50"}`}
                       >
                         <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                          0{i + 1}
+                          {i < 9 ? `0${i + 1}` : i + 1}
                         </span>
-                        <p className="mt-3 text-sm font-semibold">{s}</p>
-                        <p className="mt-1 text-xs text-emerald-500">
-                          Completed · {i + 1}83ms
+                        <p className={`mt-3 text-sm font-semibold ${isActive ? "text-primary" : ""}`}>{node.label}</p>
+                        <p className={`mt-1 text-xs ${isActive ? "text-emerald-500" : "text-muted-foreground"}`}>
+                          {isActive ? `Completed · ${new Date(telemetry.ts).toLocaleTimeString('en-IN')}` : 'Waiting...'}
                         </p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
-                          Inputs: {8 - (i % 4)} · Tools: {2 + (i % 3)}
-                        </p>
+                        {isActive && telemetry.asset && (
+                          <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-primary/70">
+                            CTX: {telemetry.asset}
+                          </p>
+                        )}
                       </button>
-                    ))}
+                    )})}
                   </div>
                 </Section>
                 <div className="mt-8 grid gap-6 lg:grid-cols-2">
-                  <Section eyebrow="Decision evidence" title="Why WATCH">
+                  <Section eyebrow="Decision evidence" title={`Why ${decisionTelemetry?.action || 'WATCH'}`}>
                     <div className="border border-border bg-card p-4">
-                      {[
-                        ["Technical", "Bearish pressure", "0.72"],
-                        ["Liquidity", "Weakening", "0.81"],
-                        ["News", "Moderately negative", "0.61"],
-                        ["Cross Asset", "Risk-off alignment", "0.69"],
-                        ["Data Freshness", "Strong", "0.95"],
-                      ].map((r) => (
+                      {Object.entries(signalFusion?.evidence_scores || {
+                        Technical: 0.72,
+                        Liquidity: 0.81,
+                        News: 0.61,
+                        "Cross Asset": 0.69,
+                        "Data Freshness": 0.95
+                      }).map(([k, v]) => (
                         <div
-                          key={r[0]}
+                          key={k}
                           className="flex items-center justify-between border-b border-border py-3 text-xs last:border-0"
                         >
-                          <span>{r[0]}</span>
-                          <span className="text-muted-foreground">{r[1]}</span>
-                          <span className="font-mono">{r[2]}</span>
+                          <span>{k}</span>
+                          <span className="text-muted-foreground">{Number(v) > 0.5 ? 'Strong alignment' : 'Weak alignment'}</span>
+                          <span className="font-mono">{Number(v).toFixed(2)}</span>
                         </div>
                       ))}
                     </div>
                   </Section>
                   <Section
                     eyebrow="Signal conflict"
-                    title="Conviction moderated"
+                    title={signalFusion?.conflict_level ? `${signalFusion.conflict_level} conflict` : 'Conviction moderated'}
                   >
                     <div className="border border-border bg-card p-4">
-                      <p className="text-sm font-semibold text-amber-500">
-                        MODERATE conflict
+                      <p className={`text-sm font-semibold ${signalFusion?.conflict_level === 'HIGH' ? 'text-rose-500' : 'text-amber-500'}`}>
+                        {signalFusion?.conflict_level || 'MODERATE'} conflict
                       </p>
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                        Technical SELL, News HOLD, Liquidity SELL, Cross Asset
-                        WATCH. The system reduced conviction because evidence
-                        sources disagree.
+                        {decisionTelemetry?.reasoning || 'Technical SELL, News HOLD, Liquidity SELL, Cross Asset WATCH. The system reduced conviction because evidence sources disagree.'}
                       </p>
                       <p className="mt-4 font-mono text-[10px] uppercase tracking-wider">
-                        Resolved decision · WATCH
+                        Resolved decision · {decisionTelemetry?.action || 'WATCH'}
                       </p>
                     </div>
                   </Section>
@@ -1216,7 +1209,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
               <>
                 <Section eyebrow="Live monitoring" title="Prepared responses">
                   <div className="grid gap-3 lg:grid-cols-3">
-                    {scenarios.map((s, i) => (
+                    {(scenariosTelemetry || scenarios).map((s: any, i: number) => (
                       <button
                         key={s.name}
                         onClick={() => setScenario(i)}
@@ -1229,14 +1222,13 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                           </span>
                         </div>
                         <p className="mt-3 text-xs text-muted-foreground">
-                          Relevance measures evidence alignment, not an exact
-                          future-price prediction.
+                          {s.trigger || 'Relevance measures evidence alignment, not an exact future-price prediction.'}
                         </p>
                         <div className="mt-4 border-t border-border pt-3 text-xs">
                           Current alignment{" "}
-                          <strong>{i + 4}/7 conditions</strong>
+                          <strong>{s.alignment || (i + 4)}/7 conditions</strong>
                           <p className="mt-2 text-emerald-500">
-                            Prepared response · {s.action}
+                            Prepared response · {s.action || s.state}
                           </p>
                         </div>
                       </button>
@@ -1248,21 +1240,15 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                     <div className="border border-primary bg-primary/10 p-5">
                       <p className="font-mono text-[10px] uppercase">Current</p>
                       <p className="mt-2 text-sm font-semibold">
-                        Risk-off / High volatility
+                        {decisionTelemetry?.market_context || 'Risk-off / High volatility'}
                       </p>
                     </div>
-                    {[
-                      "Liquidity breakdown 61%",
-                      "Recovery 31%",
-                      "Bearish continuation 54%",
-                      "Stable 47%",
-                      "News shock 12%",
-                    ].map((x) => (
+                    {(scenariosTelemetry || scenarios).map((x: any) => (
                       <div
-                        key={x}
+                        key={x.name}
                         className="border border-border px-3 py-2 text-xs text-muted-foreground"
                       >
-                        → {x}
+                        → {x.name} {x.probability}
                       </div>
                     ))}
                   </div>
@@ -1274,25 +1260,25 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                 <div className="grid gap-3 md:grid-cols-4">
                   <Metric
                     label="Risk status"
-                    value="PROTECTED"
+                    value={riskTelemetry?.status || "PROTECTED"}
                     sub="Hard constraints active"
                     tone="good"
                   />
                   <Metric
                     label="Available capital"
-                    value="₹8.42L"
-                    sub="of ₹12.00L"
+                    value={`₹${Number(agentPortfolio?.capital?.available_capital || 842000).toLocaleString('en-IN')}`}
+                    sub={`of ₹${Number(agentPortfolio?.capital?.total_capital || 1000000).toLocaleString('en-IN')}`}
                   />
                   <Metric
                     label="Current exposure"
-                    value="₹5.38L"
-                    sub="44.8% of maximum"
+                    value={`₹${Number(agentPortfolio?.capital?.allocated_capital || 538000).toLocaleString('en-IN')}`}
+                    sub={`${Math.round(Number(agentPortfolio?.capital?.allocated_capital || 538000) / Number(agentPortfolio?.capital?.total_capital || 1000000) * 100)}% of maximum`}
                   />
                   <Metric
                     label="Daily P&L"
-                    value="+₹3,240"
+                    value={`₹${agentPortfolio?.summary?.total_realized || '+3,240'}`}
                     sub="limit −₹18,000"
-                    tone="good"
+                    tone={(agentPortfolio?.summary?.total_realized || 0) >= 0 ? "good" : "warn"}
                   />
                 </div>
                 <div className="mt-8 grid gap-6 lg:grid-cols-2">

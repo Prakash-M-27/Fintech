@@ -8,3 +8,5 @@ httpx
 websockets
 python-dotenv
 pydantic>=2.0
+langgraph
+langchain-groq
