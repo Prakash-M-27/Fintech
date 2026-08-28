@@ -15,6 +15,7 @@ MODEL_MAP = {
     "nifty": NiftyPrice,
     "gold": GoldPrice,
     "usd": USDPrice,
+    "news": None,
 }
 
 _locks: dict[str, asyncio.Lock] = {}
@@ -23,47 +24,51 @@ _locks: dict[str, asyncio.Lock] = {}
 async def price_handler(asset: str, payload: dict) -> None:
     asset = asset.lower()
     model = MODEL_MAP.get(asset)
-    if model is None:
+    if model is None and asset != "news":
         logger.warning("Unknown asset: %s", asset)
         return
 
-    lock = _locks.setdefault(asset, asyncio.Lock())
-    async with lock:
-        try:
-            async with SessionLocal() as session:
-                row = model(
-                    price=payload["price"],
-                    change=payload.get("change"),
-                    change_pct=payload.get("change_pct"),
-                    volume=payload.get("volume"),
-                    timestamp=datetime.now(),
-                )
-                session.add(row)
-                await session.commit()
-                row_id = row.id
-                ts = row.timestamp.isoformat()
-        except Exception as exc:
-            logger.error("DB insert failed for %s: %s", asset, exc)
-            row_id, ts = None, None
+    if asset != "news":
+        lock = _locks.setdefault(asset, asyncio.Lock())
+        async with lock:
+            try:
+                async with SessionLocal() as session:
+                    row = model(
+                        price=payload["price"],
+                        change=payload.get("change"),
+                        change_pct=payload.get("change_pct"),
+                        volume=payload.get("volume"),
+                        timestamp=datetime.now(),
+                    )
+                    session.add(row)
+                    await session.commit()
+                    row_id = row.id
+                    ts = row.timestamp.isoformat()
+            except Exception as exc:
+                logger.error("DB insert failed for %s: %s", asset, exc)
+                row_id, ts = None, None
 
-        snapshot = {
-            "asset": asset,
-            "price": payload["price"],
-            "change": payload.get("change"),
-            "change_pct": payload.get("change_pct"),
-            "volume": payload.get("volume"),
-            "timestamp": ts,
-            "cached": False,
-        }
-        await cache_set(asset_cache_key(asset), snapshot)
-        await emit_market_update("market_update", snapshot)
-        await emit_market_update("price_update", {asset: payload["price"]})
+            snapshot = {
+                "asset": asset,
+                "price": payload["price"],
+                "change": payload.get("change"),
+                "change_pct": payload.get("change_pct"),
+                "volume": payload.get("volume"),
+                "timestamp": ts,
+                "cached": False,
+            }
+            await cache_set(asset_cache_key(asset), snapshot)
+            await emit_market_update("market_update", snapshot)
+    else:
+        await emit_market_update("news_update", payload)
+        await emit_market_update("market_update", payload)
 
 
 async def warm_up_from_db() -> None:
     """Load most recent row per asset into cache + socket at startup."""
-    ts = datetime.now().replace(tzinfo=None)
     for asset, model in MODEL_MAP.items():
+        if model is None:
+            continue
         try:
             async with SessionLocal() as session:
                 result = await session.execute(select(model).order_by(model.id.desc()).limit(1))

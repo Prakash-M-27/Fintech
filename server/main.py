@@ -9,6 +9,7 @@ import socketio
 from database import init_db
 from services.cache import close_redis, get_redis
 from services.frankfurter import poll_usd_loop
+from services.news import poll_news_loop
 from services.nifty import poll_nifty_loop
 from services.twelvedata import connect_twelvedata
 from socket_manager import sio, register_socket_events
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(connect_twelvedata())
     asyncio.create_task(poll_usd_loop())
     asyncio.create_task(poll_nifty_loop())
+    asyncio.create_task(poll_news_loop())
     await warm_up_from_db()
     logger.info("Axiom backend started")
     yield
