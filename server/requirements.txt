@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-socketio[asyncio]
+sqlalchemy[asyncio]
+asyncpg
+redis[hiredis]
+httpx
+websockets
+python-dotenv

@@ -1,0 +1,85 @@
+import asyncio
+import logging
+from datetime import datetime
+
+from sqlalchemy import select
+
+from database import SessionLocal, init_db
+from models import GoldPrice, NiftyPrice, USDPrice
+from services.cache import asset_cache_key, cache_set
+from socket_manager import emit_market_update
+
+logger = logging.getLogger(__name__)
+
+MODEL_MAP = {
+    "nifty": NiftyPrice,
+    "gold": GoldPrice,
+    "usd": USDPrice,
+}
+
+_locks: dict[str, asyncio.Lock] = {}
+
+
+async def price_handler(asset: str, payload: dict) -> None:
+    asset = asset.lower()
+    model = MODEL_MAP.get(asset)
+    if model is None:
+        logger.warning("Unknown asset: %s", asset)
+        return
+
+    lock = _locks.setdefault(asset, asyncio.Lock())
+    async with lock:
+        try:
+            async with SessionLocal() as session:
+                row = model(
+                    price=payload["price"],
+                    change=payload.get("change"),
+                    change_pct=payload.get("change_pct"),
+                    volume=payload.get("volume"),
+                    timestamp=datetime.now(),
+                )
+                session.add(row)
+                await session.commit()
+                row_id = row.id
+                ts = row.timestamp.isoformat()
+        except Exception as exc:
+            logger.error("DB insert failed for %s: %s", asset, exc)
+            row_id, ts = None, None
+
+        snapshot = {
+            "asset": asset,
+            "price": payload["price"],
+            "change": payload.get("change"),
+            "change_pct": payload.get("change_pct"),
+            "volume": payload.get("volume"),
+            "timestamp": ts,
+            "cached": False,
+        }
+        await cache_set(asset_cache_key(asset), snapshot)
+        await emit_market_update("market_update", snapshot)
+        await emit_market_update("price_update", {asset: payload["price"]})
+
+
+async def warm_up_from_db() -> None:
+    """Load most recent row per asset into cache + socket at startup."""
+    ts = datetime.now().replace(tzinfo=None)
+    for asset, model in MODEL_MAP.items():
+        try:
+            async with SessionLocal() as session:
+                result = await session.execute(select(model).order_by(model.id.desc()).limit(1))
+                row = result.scalars().first()
+                if row is None:
+                    continue
+                snapshot = {
+                    "asset": asset,
+                    "price": float(row.price),
+                    "change": float(row.change) if row.change is not None else None,
+                    "change_pct": float(row.change_pct) if row.change_pct is not None else None,
+                    "volume": row.volume,
+                    "timestamp": row.timestamp.isoformat(),
+                    "cached": True,
+                }
+                await cache_set(asset_cache_key(asset), snapshot)
+                await emit_market_update("market_update", snapshot)
+        except Exception as exc:
+            logger.warning("Warm-up failed for %s: %s", asset, exc)
