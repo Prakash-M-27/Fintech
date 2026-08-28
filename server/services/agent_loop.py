@@ -291,8 +291,16 @@ async def on_price_tick(asset: str, current_price: float) -> None:
                         "pnl":     float(realized),
                         "ts":      datetime.now(timezone.utc).isoformat(),
                     })
-                else:
                     await session.commit()
+
+            # Trigger LangGraph Fast-Path Evaluation
+            from services.graph_runner import run_langgraph_cycle
+            asyncio.create_task(run_langgraph_cycle(
+                asset, 
+                "PRICE_CHANGED", 
+                {"market_data": {"price": current_price, "timestamp": datetime.now(timezone.utc).isoformat()}}
+            ))
+
 
         except Exception as exc:
             logger.error("on_price_tick error for %s: %s", asset, exc)
@@ -440,128 +448,16 @@ async def _run_decision(
     db_art: NewsArticle,
     signal_id: Optional[int],
 ) -> None:
-    """Run Call-B, enforce risk rules, persist decision, mutate positions."""
+    """Trigger LangGraph cycle with NEWS_DETECTED."""
     asset = classification["asset"]
-
-    # ── Get current technical snapshot ────────────────────────────────
-    price_history = await _get_price_history(asset)
-    snap = build_technical_snapshot(price_history)
-
-    # ── Get open position and capital state ───────────────────────────
-    async with SessionLocal() as session:
-        open_pos = await _get_open_position(session, asset)
-        open_pos_dict: Optional[dict] = None
-        if open_pos:
-            open_pos_dict = {
-                "status":           open_pos.status.value,
-                "entry_price":      float(open_pos.entry_price),
-                "entry_amount_inr": float(open_pos.entry_amount_inr),
-                "unrealized_pnl":   float(open_pos.unrealized_pnl or 0),
-            }
-
-        ledger = await _get_or_init_capital(session)
-        await session.commit()
-        capital_state = {
-            "total_capital":     float(ledger.total_capital),
-            "allocated_capital": float(ledger.allocated_capital),
-            "available_capital": float(ledger.available_capital),
+    from services.graph_runner import run_langgraph_cycle
+    await run_langgraph_cycle(
+        asset,
+        "NEWS_DETECTED",
+        {
+            "news_state": classification,
         }
-
-    signal_ctx = {
-        **classification,
-        "article_title": db_art.title,
-    }
-
-    # ── Groq Call B ───────────────────────────────────────────────────
-    try:
-        decision_raw = await get_decision(signal_ctx, snap, open_pos_dict, capital_state)
-    except Exception as exc:
-        logger.error("Decision engine failed for asset=%s: %s", asset, exc)
-        agent_state["last_error"] = str(exc)
-        return
-
-    action = decision_raw["action"]
-    # ── SERVER-SIDE CAPITAL ENFORCEMENT ──────────────────────────────
-    # (Never trust the LLM alone for money math)
-    requested_amount = Decimal(str(round(decision_raw["amount_inr"], 2)))
-    max_allowed = Decimal(str(MAX_TRADE_AMOUNT))
-    available = Decimal(str(capital_state["available_capital"]))
-
-    if action in ("BUY", "SELL"):
-        # Clamp to MAX_TRADE_AMOUNT
-        amount_inr = min(requested_amount, max_allowed)
-        # Reject if insufficient capital
-        if amount_inr > available:
-            logger.warning(
-                "Decision REJECTED — insufficient capital: requested=₹%.0f available=₹%.0f",
-                float(amount_inr), float(available),
-            )
-            action = "HOLD"
-            amount_inr = Decimal("0.00")
-        # Reject BUY/SELL if position already open (max 1 concurrent per asset)
-        if open_pos_dict is not None and action in ("BUY", "SELL"):
-            logger.warning(
-                "Decision overridden — open position already exists for %s, forcing HOLD",
-                asset,
-            )
-            action = "HOLD"
-            amount_inr = Decimal("0.00")
-    elif action == "EXIT":
-        amount_inr = Decimal("0.00")
-        if open_pos_dict is None:
-            logger.info("EXIT decision but no open position for %s — treating as HOLD", asset)
-            action = "HOLD"
-    else:  # HOLD
-        amount_inr = Decimal("0.00")
-
-    # ── Persist decision ──────────────────────────────────────────────
-    async with SessionLocal() as session:
-        db_decision = AgentDecision(
-            asset=asset,
-            action=ActionEnum(action),
-            amount_inr=amount_inr,
-            confidence=decision_raw["confidence"],
-            triggering_signal_id=signal_id,
-            technical_snapshot=snap,
-            reasoning=decision_raw["reasoning"],
-        )
-        session.add(db_decision)
-        await session.flush()
-        decision_id = db_decision.id
-
-        # ── Execute paper trade ───────────────────────────────────────
-        if action in ("BUY", "SELL") and amount_inr > 0:
-            current_price = snap.get("price") or (price_history[-1] if price_history else 0)
-            await _open_position(session, asset, amount_inr, current_price, decision_id)
-
-        elif action == "EXIT":
-            pos = await _get_open_position(session, asset)
-            if pos:
-                current_price = snap.get("price") or (price_history[-1] if price_history else float(pos.entry_price))
-                await _close_position(session, pos, current_price, "agent_decision_exit")
-
-        # ── Recompute and append capital ledger ───────────────────────
-        allocated = await _compute_allocated_capital(session)
-        await _append_capital(session, allocated, reason=f"{action}_{asset}")
-        await session.commit()
-        agent_state["decisions_total"] += 1
-
-    logger.info(
-        "[PAPER TRADE] Decision: asset=%s action=%s amount=₹%.0f conf=%.2f",
-        asset, action, float(amount_inr), decision_raw["confidence"],
     )
-
-    # Emit agent_decision Socket.IO event
-    await emit_market_update("agent_decision", {
-        "decision_id": decision_id,
-        "asset":       asset,
-        "action":      action,
-        "amount_inr":  float(amount_inr),
-        "confidence":  decision_raw["confidence"],
-        "reasoning":   decision_raw["reasoning"],
-        "technical":   snap,
-        "ts":          datetime.now(timezone.utc).isoformat(),
-    })
 
 
 # ═══════════════════════════════════════════════════════════════════════════
