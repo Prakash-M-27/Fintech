@@ -1,16 +1,20 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
+import {
+  Area, AreaChart, CartesianGrid, ComposedChart, Line,
+  ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar,
+} from 'recharts'
 import {
   Activity, AlertTriangle, ArrowDownRight, ArrowUpRight,
-  BarChart2, Bell, Bot, CheckCircle2, Circle, Clock,
+  BarChart2, Bot, CheckCircle2, Circle, Clock,
   Cpu, Crosshair, Database, Gauge, History, Layers3,
   PanelLeft, Settings2, ShieldCheck, TrendingDown, TrendingUp,
-  Wallet, Zap, RefreshCw, Target,
+  Wallet, Zap, RefreshCw, Target, Eye, Brain, Scale,
+  DollarSign, Play, Pause, ChevronRight, ChevronDown,
+  AlertCircle, CheckCheck, Minus, ArrowRight,
 } from 'lucide-react'
 import { calcEMA, calcRSI, calcMACD, calcBollinger } from '@/lib/indicators'
-import { TVPriceChart, TVRSIChart, TVMACDChart } from '@/components/tv-chart'
 
 // ── types ──────────────────────────────────────────────────────────────────
 type Candle = {
@@ -22,7 +26,7 @@ type Order = { id: string; side: 'BUY' | 'SELL'; qty: number; price: number; sta
 type AgentLog = { id: number; ts: string; agent: string; msg: string; tone: 'green' | 'amber' | 'red' | 'blue' }
 type Position = { symbol: string; qty: number; entry: number; current: number }
 type AISuggestion = {
-  action: 'BUY' | 'SELL' | 'HOLD'
+  action: 'BUY' | 'SELL' | 'HOLD' | 'WATCH' | 'REDUCE' | 'EXIT'
   confidence: number
   entry: number
   target: number
@@ -30,7 +34,24 @@ type AISuggestion = {
   reasoning: string
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
   trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  validityConditions?: string[]
+  invalidationConditions?: string[]
   loading?: boolean
+}
+type Scenario = {
+  name: string
+  relevance: number
+  trigger: string
+  response: string
+  status: 'WATCHING' | 'ARMED' | 'TRIGGERED'
+}
+type DecisionLifecycle = {
+  id: number
+  action: string
+  confidence: number
+  status: 'VALID' | 'SUPERSEDED' | 'INVALIDATED'
+  reason: string
+  ts: string
 }
 
 // ── constants ──────────────────────────────────────────────────────────────
@@ -39,6 +60,7 @@ const nowT = () => new Date().toLocaleTimeString('en-IN', { hour12: false })
 const rand = (min: number, max: number) => Math.random() * (max - min) + min
 
 const AGENTS  = ['Observer', 'Analyst', 'Risk Engine', 'Allocator', 'Executor']
+const AGENT_ICONS = [Eye, Brain, ShieldCheck, DollarSign, Zap]
 const SYMBOLS = ['NIFTY 50', 'BANKNIFTY', 'SENSEX', 'GOLD', 'USD/INR']
 const BASE: Record<string, number> = {
   'NIFTY 50': 22458, BANKNIFTY: 48210, SENSEX: 73820, GOLD: 72418, 'USD/INR': 83.42,
@@ -67,54 +89,37 @@ const agentMessages: Record<string, string[]> = {
 }
 const tones: AgentLog['tone'][] = ['blue', 'green', 'amber', 'green', 'green']
 
-// ── seed chart with deterministic indicators ─────────────────────────────────
+const SEED_SCENARIOS: Scenario[] = [
+  { name: 'Breakout confirmation', relevance: 62, trigger: 'Price holds above resistance with volume', response: 'MAINTAIN / ADD', status: 'WATCHING' },
+  { name: 'Liquidity deterioration', relevance: 31, trigger: 'Bid-ask spread widens > 2x normal', response: 'REDUCE', status: 'WATCHING' },
+  { name: 'Negative macro shock', relevance: 18, trigger: 'High-impact news classified negative', response: 'REASSESS / EXIT', status: 'WATCHING' },
+  { name: 'Range continuation', relevance: 42, trigger: 'Price oscillates within ±0.4% band', response: 'HOLD / WATCH', status: 'ARMED' },
+]
+
+// ── seed chart ─────────────────────────────────────────────────────────────
 function buildCandles(symbol: string): Candle[] {
-  const base = BASE[symbol] || 22458
+  const base = BASE[symbol]
   const prices: number[] = []
   const vols:   number[] = []
-  const fixedBaseTime = 1710000000000
-
+  let v = base - rand(80, 160)
   for (let i = 59; i >= 0; i--) {
-    const delta = Math.sin(i * 0.4) * 12 + Math.cos(i * 0.2) * 5
-    const v = base - 50 + (59 - i) * 1.2 + delta
+    v += rand(-18, 22)
     prices.push(+v.toFixed(2))
-    vols.push(50 + Math.floor(Math.sin(i * 0.8) * 30))
+    vols.push(Math.floor(rand(20, 90)))
   }
-
   const ema20arr = calcEMA(prices, 20)
   const ema50arr = calcEMA(prices, 50)
   const rsiArr   = calcRSI(prices, 14)
   const { macd, signal, hist } = calcMACD(prices)
   const { upper, lower, mid }  = calcBollinger(prices, 20)
-
   return prices.map((p, i) => {
-    const t = new Date(fixedBaseTime + i * 10000)
-    const hours = String(t.getUTCHours()).padStart(2, '0')
-    const mins = String(t.getUTCMinutes()).padStart(2, '0')
-    const secs = String(t.getUTCSeconds()).padStart(2, '0')
-    const close = p
-    const open = i > 0 ? prices[i - 1] : +(p - 4).toFixed(2)
-    const high = +(Math.max(open, close) + Math.abs(Math.sin(i * 0.7)) * 8 + 1.5).toFixed(2)
-    const low = +(Math.min(open, close) - Math.abs(Math.cos(i * 0.7)) * 8 - 1.5).toFixed(2)
-
+    const t = new Date(Date.now() - (59 - i) * 10000)
     return {
-      time:       `${hours}:${mins}:${secs}`,
-      value:      p,
-      open,
-      high,
-      low,
-      close,
-      vwap:       +(p - 3.5).toFixed(2),
-      vol:        vols[i],
-      ema20:      ema20arr[i],
-      ema50:      ema50arr[i],
-      bbUpper:    upper[i],
-      bbLower:    lower[i],
-      bbMid:      mid[i],
-      rsi:        rsiArr[i],
-      macd:       macd[i],
-      macdSignal: signal[i],
-      macdHist:   hist[i],
+      time: t.toLocaleTimeString('en-IN', { hour12: false }),
+      value: p, vwap: +(p - rand(2, 8)).toFixed(2), vol: vols[i],
+      ema20: ema20arr[i], ema50: ema50arr[i],
+      bbUpper: upper[i], bbLower: lower[i], bbMid: mid[i],
+      rsi: rsiArr[i], macd: macd[i], macdSignal: signal[i], macdHist: hist[i],
     }
   })
 }
@@ -131,8 +136,6 @@ function ChartTooltip({ active, payload }: any) {
         <span className="text-gray-400">VWAP</span><span className="font-mono text-indigo-600">{fmt(d.vwap)}</span>
         <span className="text-gray-400">EMA20</span><span className="font-mono text-orange-500">{fmt(d.ema20)}</span>
         <span className="text-gray-400">EMA50</span><span className="font-mono text-purple-500">{fmt(d.ema50)}</span>
-        <span className="text-gray-400">BB Up</span><span className="font-mono text-gray-500">{fmt(d.bbUpper)}</span>
-        <span className="text-gray-400">BB Lo</span><span className="font-mono text-gray-500">{fmt(d.bbLower)}</span>
         <span className="text-gray-400">RSI</span><span className={`font-mono font-semibold ${d.rsi > 70 ? 'text-rose-500' : d.rsi < 30 ? 'text-emerald-500' : 'text-gray-700'}`}>{d.rsi}</span>
         <span className="text-gray-400">Vol</span><span className="font-mono text-gray-700">{d.vol}K</span>
       </div>
@@ -143,7 +146,6 @@ function ChartTooltip({ active, payload }: any) {
 // ── navbar ─────────────────────────────────────────────────────────────────
 function Navbar({ pulse }: { pulse: boolean }) {
   const [collapsed, setCollapsed] = useState(false)
-  const path = '/live'
   return (
     <aside className={`${collapsed ? 'w-14' : 'w-56'} hidden shrink-0 border-r border-gray-100 bg-white transition-all duration-200 md:flex flex-col`}>
       <div className="flex h-14 items-center justify-between border-b border-gray-100 px-3">
@@ -161,9 +163,9 @@ function Navbar({ pulse }: { pulse: boolean }) {
       </div>
       <nav className="flex flex-col gap-0.5 p-2 flex-1">
         {!collapsed && <p className="mb-1 px-2 font-mono text-[9px] uppercase tracking-[.18em] text-gray-300">Workspace</p>}
-        {NAV_LINKS.map(({ label, path: p, Icon }) => (
-          <a key={p} href={p} className={`flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors ${
-            p === path ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
+        {NAV_LINKS.map(({ label, path, Icon }) => (
+          <a key={path} href={path} className={`flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors ${
+            path === '/live' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
           }`}>
             <Icon className="size-3.5 shrink-0" />
             {!collapsed && label}
@@ -183,7 +185,7 @@ function Navbar({ pulse }: { pulse: boolean }) {
   )
 }
 
-// ── RSI panel ─────────────────────────────────────────────────────────────
+// ── RSI panel ──────────────────────────────────────────────────────────────
 function RSIPanel({ data }: { data: Candle[] }) {
   return (
     <ResponsiveContainer width="100%" height={80}>
@@ -200,7 +202,7 @@ function RSIPanel({ data }: { data: Candle[] }) {
   )
 }
 
-// ── MACD panel ────────────────────────────────────────────────────────────
+// ── MACD panel ─────────────────────────────────────────────────────────────
 function MACDPanel({ data }: { data: Candle[] }) {
   return (
     <ResponsiveContainer width="100%" height={80}>
@@ -210,11 +212,7 @@ function MACDPanel({ data }: { data: Candle[] }) {
         <YAxis tick={{ fontSize: 8, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={32} />
         <Tooltip contentStyle={{ fontSize: 10 }} />
         <ReferenceLine y={0} stroke="#e5e7eb" strokeWidth={1} />
-        <Bar dataKey="macdHist" fill="#10b981" opacity={0.6} isAnimationActive={false}
-          label={false}
-          // negative bars red
-          // recharts doesn't support per-bar color easily, use a fixed color
-        />
+        <Bar dataKey="macdHist" fill="#10b981" opacity={0.6} isAnimationActive={false} label={false} />
         <Line type="monotone" dataKey="macd" stroke="#3b82f6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
         <Line type="monotone" dataKey="macdSignal" stroke="#f97316" strokeWidth={1.5} dot={false} isAnimationActive={false} />
       </ComposedChart>
@@ -222,8 +220,9 @@ function MACDPanel({ data }: { data: Candle[] }) {
   )
 }
 
-// ── AI suggestion card ────────────────────────────────────────────────────
-function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: () => void }) {
+// ── Decision lifecycle card ────────────────────────────────────────────────
+function DecisionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: () => void }) {
+  const [expanded, setExpanded] = useState(false)
   if (!s) return (
     <div className="flex flex-col items-center justify-center gap-2 py-8 text-gray-300">
       <Bot className="size-8" />
@@ -233,17 +232,21 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
   if (s.loading) return (
     <div className="flex flex-col items-center justify-center gap-2 py-8 text-gray-400">
       <RefreshCw className="size-5 animate-spin" />
-      <p className="font-mono text-[10px]">Groq AI analysing…</p>
+      <p className="font-mono text-[10px]">Groq AI reasoning…</p>
     </div>
   )
 
-  const actionColor = s.action === 'BUY' ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
-    : s.action === 'SELL' ? 'text-rose-600 bg-rose-50 border-rose-200'
-    : 'text-amber-600 bg-amber-50 border-amber-200'
+  const actionColor =
+    s.action === 'BUY'    ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
+    s.action === 'SELL'   ? 'text-rose-600 bg-rose-50 border-rose-200' :
+    s.action === 'EXIT'   ? 'text-rose-600 bg-rose-50 border-rose-200' :
+    s.action === 'REDUCE' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                            'text-amber-600 bg-amber-50 border-amber-200'
   const trendColor = s.trend === 'BULLISH' ? 'text-emerald-600' : s.trend === 'BEARISH' ? 'text-rose-600' : 'text-amber-600'
 
   return (
     <div className="flex flex-col gap-3">
+      {/* action + status row */}
       <div className="flex items-center justify-between">
         <span className={`rounded-md border px-3 py-1 font-mono text-sm font-bold ${actionColor}`}>
           {s.action}
@@ -254,16 +257,21 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
             s.riskLevel === 'LOW' ? 'bg-emerald-50 text-emerald-600' :
             s.riskLevel === 'HIGH' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600'
           }`}>{s.riskLevel} RISK</span>
+          <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-600">VALID</span>
         </div>
       </div>
 
-      <div className="h-2 w-full rounded-full bg-gray-100">
-        <div className={`h-2 rounded-full transition-all ${
-          s.action === 'BUY' ? 'bg-emerald-400' : s.action === 'SELL' ? 'bg-rose-400' : 'bg-amber-400'
-        }`} style={{ width: `${s.confidence}%` }} />
+      {/* confidence bar */}
+      <div>
+        <div className="h-1.5 w-full rounded-full bg-gray-100">
+          <div className={`h-1.5 rounded-full transition-all ${
+            s.action === 'BUY' ? 'bg-emerald-400' : s.action === 'SELL' || s.action === 'EXIT' ? 'bg-rose-400' : 'bg-amber-400'
+          }`} style={{ width: `${s.confidence}%` }} />
+        </div>
+        <p className="mt-1 font-mono text-[10px] text-gray-400">Confidence: {s.confidence}%</p>
       </div>
-      <p className="font-mono text-[10px] text-gray-400">Confidence: {s.confidence}%</p>
 
+      {/* entry / target / stop */}
       <div className="grid grid-cols-3 gap-2">
         {[['Entry', fmt(s.entry), 'text-gray-700'], ['Target', fmt(s.target), 'text-emerald-600'], ['Stop', fmt(s.stopLoss), 'text-rose-600']].map(([l, v, c]) => (
           <div key={l} className="rounded-md border border-gray-100 p-2 text-center">
@@ -273,11 +281,97 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
         ))}
       </div>
 
+      {/* reasoning */}
       <p className="text-[11px] leading-relaxed text-gray-500">{s.reasoning}</p>
+
+      {/* validity / invalidation conditions */}
+      {(s.validityConditions?.length || s.invalidationConditions?.length) && (
+        <div>
+          <button onClick={() => setExpanded(v => !v)} className="flex items-center gap-1 font-mono text-[10px] text-gray-400 hover:text-gray-600">
+            {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            Decision conditions
+          </button>
+          {expanded && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {s.validityConditions?.length ? (
+                <div className="rounded-md border border-emerald-100 bg-emerald-50 p-2">
+                  <p className="mb-1 font-mono text-[9px] uppercase tracking-wider text-emerald-600">Valid while</p>
+                  {s.validityConditions.map((c, i) => (
+                    <p key={i} className="text-[10px] text-emerald-700">· {c}</p>
+                  ))}
+                </div>
+              ) : null}
+              {s.invalidationConditions?.length ? (
+                <div className="rounded-md border border-rose-100 bg-rose-50 p-2">
+                  <p className="mb-1 font-mono text-[9px] uppercase tracking-wider text-rose-600">Invalidate if</p>
+                  {s.invalidationConditions.map((c, i) => (
+                    <p key={i} className="text-[10px] text-rose-700">· {c}</p>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
 
       <button onClick={onRefresh} className="flex items-center justify-center gap-1.5 rounded-md border border-gray-200 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
         <RefreshCw className="size-3" /> Refresh analysis
       </button>
+    </div>
+  )
+}
+
+// ── Scenario readiness panel ───────────────────────────────────────────────
+function ScenarioPanel({ scenarios, currentAction }: { scenarios: Scenario[]; currentAction: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="mb-1 flex items-center justify-between">
+        <p className="font-mono text-[9px] uppercase tracking-wider text-gray-400">Current: {currentAction}</p>
+        <span className="font-mono text-[9px] text-gray-300">Monitoring {scenarios.length} scenarios</span>
+      </div>
+      {scenarios.map((sc, i) => {
+        const barColor = sc.status === 'TRIGGERED' ? 'bg-rose-400' : sc.status === 'ARMED' ? 'bg-amber-400' : 'bg-gray-300'
+        const badgeColor = sc.status === 'TRIGGERED' ? 'bg-rose-50 text-rose-600' : sc.status === 'ARMED' ? 'bg-amber-50 text-amber-600' : 'bg-gray-50 text-gray-400'
+        return (
+          <div key={i} className="rounded-md border border-gray-100 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-gray-700">{sc.name}</span>
+              <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${badgeColor}`}>{sc.status}</span>
+            </div>
+            <div className="mt-1.5 h-1 w-full rounded-full bg-gray-100">
+              <div className={`h-1 rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${sc.relevance}%` }} />
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <p className="font-mono text-[9px] text-gray-400">{sc.relevance}% relevance</p>
+              <p className="font-mono text-[9px] text-gray-500">→ {sc.response}</p>
+            </div>
+            <p className="mt-1 text-[10px] text-gray-400">{sc.trigger}</p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Signal fusion bars ─────────────────────────────────────────────────────
+function SignalFusion({ tech, liquidity, news, crossAsset }: { tech: number; liquidity: number; news: number; crossAsset: number }) {
+  const signals = [
+    { label: 'Technical', value: tech, color: 'bg-indigo-400' },
+    { label: 'Liquidity', value: liquidity, color: 'bg-emerald-400' },
+    { label: 'News', value: news, color: 'bg-amber-400' },
+    { label: 'Cross-asset', value: crossAsset, color: 'bg-purple-400' },
+  ]
+  return (
+    <div className="flex flex-col gap-2">
+      {signals.map(s => (
+        <div key={s.label} className="flex items-center gap-2">
+          <span className="w-20 shrink-0 font-mono text-[10px] text-gray-400">{s.label}</span>
+          <div className="flex-1 h-1.5 rounded-full bg-gray-100">
+            <div className={`h-1.5 rounded-full transition-all duration-700 ${s.color}`} style={{ width: `${s.value}%` }} />
+          </div>
+          <span className="w-8 text-right font-mono text-[10px] text-gray-500">{s.value}%</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -298,160 +392,17 @@ export default function LiveTradingPage() {
   const [suggestion, setSuggestion]   = useState<AISuggestion | null>(null)
   const [activeTab, setActiveTab]     = useState<'price'|'rsi'|'macd'>('price')
   const [showIndicators, setShowIndicators] = useState({ ema20: true, ema50: true, bb: true, vwap: true })
+  const [scenarios, setScenarios]     = useState<Scenario[]>(SEED_SCENARIOS)
+  const [decisionHistory, setDecisionHistory] = useState<DecisionLifecycle[]>([])
+  const [loopRunning, setLoopRunning] = useState(true)
+  const [signalFusion, setSignalFusion] = useState({ tech: 72, liquidity: 81, news: 61, crossAsset: 69 })
+  const [activePanel, setActivePanel] = useState<'decision'|'scenarios'|'signals'>('decision')
   const logId   = useRef(0)
   const orderId = useRef(100)
-  const aiTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const decId   = useRef(100)
 
-  const symbolToAssetKey: Record<string, string> = {
-    'NIFTY 50': 'nifty',
-    'BANKNIFTY': 'nifty',
-    'SENSEX': 'nifty',
-    'GOLD': 'gold',
-    'USD/INR': 'usd',
-  }
-
-  // symbol change → rebuild candles & subscribe to real socket stream
-  useEffect(() => {
-    setCandles(buildCandles(symbol))
-
-    const assetKey = symbolToAssetKey[symbol] || 'nifty'
-    const socket = io('http://localhost:8000')
-
-    socket.emit('subscribe', assetKey)
-
-    // Fetch initial history from backend
-    fetch(`http://localhost:8000/api/market/${assetKey}/history`)
-      .then(res => res.json())
-      .then(history => {
-        if (Array.isArray(history) && history.length > 0) {
-          const prices = history.map((h: any) => Number(h.price))
-          const ema20arr = calcEMA(prices, 20)
-          const ema50arr = calcEMA(prices, 50)
-          const rsiArr = calcRSI(prices, 14)
-          const { macd, signal, hist } = calcMACD(prices)
-          const { upper, lower, mid } = calcBollinger(prices, 20)
-
-          const loadedCandles: Candle[] = history.map((h: any, i: number) => ({
-            time: h.timestamp ? new Date(h.timestamp).toLocaleTimeString('en-IN', { hour12: false }) : nowT(),
-            value: Number(h.price),
-            vwap: +(Number(h.price) - rand(2, 6)).toFixed(2),
-            vol: Math.floor(rand(20, 90)),
-            ema20: ema20arr[i],
-            ema50: ema50arr[i],
-            bbUpper: upper[i],
-            bbLower: lower[i],
-            bbMid: mid[i],
-            rsi: rsiArr[i],
-            macd: macd[i],
-            macdSignal: signal[i],
-            macdHist: hist[i],
-          }))
-          setCandles(loadedCandles)
-        }
-      })
-      .catch(() => {})
-
-    // Handle real-time market updates from socket server
-    socket.on('market_update', (data: { asset?: string; price?: number; change_pct?: number; time?: string }) => {
-      if (data && data.price && (data.asset === assetKey || !data.asset)) {
-        const newPrice = Number(data.price)
-        const tickTime = data.time || nowT()
-
-        setCandles(prev => {
-          if (!prev.length) return prev
-          const last = prev[prev.length - 1]
-          const isNewCandle = tickTime !== last.time
-
-          let newPrices: number[]
-          let updated: Candle[]
-
-          if (isNewCandle) {
-            newPrices = [...prev.map(c => c.value), newPrice].slice(-60)
-          } else {
-            newPrices = [...prev.map(c => c.value).slice(0, -1), newPrice]
-          }
-
-          const ema20arr = calcEMA(newPrices, 20)
-          const ema50arr = calcEMA(newPrices, 50)
-          const rsiArr = calcRSI(newPrices, 14)
-          const { macd, signal, hist } = calcMACD(newPrices)
-          const { upper, lower, mid } = calcBollinger(newPrices, 20)
-
-          if (isNewCandle) {
-            updated = prev.map((c, i) => ({
-              ...c,
-              ema20: ema20arr[i] || c.ema20,
-              ema50: ema50arr[i] || c.ema50,
-              bbUpper: upper[i] || c.bbUpper,
-              bbLower: lower[i] || c.bbLower,
-              bbMid: mid[i] || c.bbMid,
-              rsi: rsiArr[i] || c.rsi,
-              macd: macd[i] || c.macd,
-              macdSignal: signal[i] || c.macdSignal,
-              macdHist: hist[i] || c.macdHist,
-            }))
-            const lastIdx = newPrices.length - 1
-            updated.push({
-              time: tickTime,
-              value: newPrice,
-              vwap: +(newPrice - rand(2, 6)).toFixed(2),
-              vol: Math.floor(rand(20, 90)),
-              ema20: ema20arr[lastIdx],
-              ema50: ema50arr[lastIdx],
-              bbUpper: upper[lastIdx],
-              bbLower: lower[lastIdx],
-              bbMid: mid[lastIdx],
-              rsi: rsiArr[lastIdx],
-              macd: macd[lastIdx],
-              macdSignal: signal[lastIdx],
-              macdHist: hist[lastIdx],
-            })
-            updated = updated.slice(-60)
-          } else {
-            updated = prev.map((c, i) => {
-              if (i === prev.length - 1) {
-                return {
-                  ...c,
-                  value: newPrice,
-                  ema20: ema20arr[i],
-                  ema50: ema50arr[i],
-                  bbUpper: upper[i],
-                  bbLower: lower[i],
-                  bbMid: mid[i],
-                  rsi: rsiArr[i],
-                  macd: macd[i],
-                  macdSignal: signal[i],
-                  macdHist: hist[i],
-                }
-              }
-              return {
-                ...c,
-                ema20: ema20arr[i] || c.ema20,
-                ema50: ema50arr[i] || c.ema50,
-                bbUpper: upper[i] || c.bbUpper,
-                bbLower: lower[i] || c.bbLower,
-                bbMid: mid[i] || c.bbMid,
-                rsi: rsiArr[i] || c.rsi,
-                macd: macd[i] || c.macd,
-                macdSignal: signal[i] || c.macdSignal,
-                macdHist: hist[i] || c.macdHist,
-              }
-            })
-          }
-          return updated
-        })
-
-        setPositions(prev =>
-          prev.map(p => (p.symbol === symbol ? { ...p, current: newPrice } : p))
-        )
-        setPulse(v => !v)
-      }
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [symbol])
+  // symbol change → rebuild candles
+  useEffect(() => { setCandles(buildCandles(symbol)) }, [symbol])
 
   // fetch AI suggestion
   const fetchSuggestion = useCallback(async (c: Candle[]) => {
@@ -464,24 +415,90 @@ export default function LiveTradingPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          symbol,
-          price:   last.value,
-          change:  (((last.value - prev.value) / prev.value) * 100).toFixed(2),
-          rsi:     last.rsi,
-          macd:    last.macd,
-          signal:  last.macdSignal,
-          ema20:   last.ema20,
-          ema50:   last.ema50,
-          bbUpper: last.bbUpper,
-          bbLower: last.bbLower,
-          vwap:    last.vwap,
-          volume:  last.vol,
+          symbol, price: last.value,
+          change: (((last.value - prev.value) / prev.value) * 100).toFixed(2),
+          rsi: last.rsi, macd: last.macd, signal: last.macdSignal,
+          ema20: last.ema20, ema50: last.ema50,
+          bbUpper: last.bbUpper, bbLower: last.bbLower,
+          vwap: last.vwap, volume: last.vol,
         }),
       })
       const data = await res.json()
-      if (!data.error) setSuggestion({ ...data, loading: false })
+      if (!data.error) {
+        setSuggestion({ ...data, loading: false })
+        // push to decision history
+        setDecisionHistory(prev => [{
+          id: decId.current++,
+          action: data.action,
+          confidence: data.confidence,
+          status: 'VALID',
+          reason: (data.reasoning || '').slice(0, 60),
+          ts: nowT(),
+        }, ...prev.map(d => d.status === 'VALID' ? { ...d, status: 'SUPERSEDED' as const } : d).slice(0, 9)])
+        // update signal fusion with slight drift
+        setSignalFusion(prev => ({
+          tech:       Math.min(100, Math.max(20, prev.tech + Math.floor(rand(-5, 6)))),
+          liquidity:  Math.min(100, Math.max(20, prev.liquidity + Math.floor(rand(-4, 5)))),
+          news:       Math.min(100, Math.max(20, prev.news + Math.floor(rand(-6, 7)))),
+          crossAsset: Math.min(100, Math.max(20, prev.crossAsset + Math.floor(rand(-3, 4)))),
+        }))
+      }
     } catch { setSuggestion(s => s ? { ...s, loading: false } : null) }
   }, [symbol])
+
+  // price tick every 1.5s
+  useEffect(() => {
+    if (!loopRunning) return
+    const t = setInterval(() => {
+      setCandles(prev => {
+        const last  = prev[prev.length - 1]
+        const delta = rand(-14, 16)
+        const newPrices = [...prev.map(c => c.value).slice(0, -1), +(last.value + delta).toFixed(2)]
+        const ema20arr  = calcEMA(newPrices, 20)
+        const ema50arr  = calcEMA(newPrices, 50)
+        const rsiArr    = calcRSI(newPrices, 14)
+        const { macd, signal, hist } = calcMACD(newPrices)
+        const { upper, lower, mid }  = calcBollinger(newPrices, 20)
+        const updated = prev.map((c, i) => ({
+          ...c, value: newPrices[i],
+          vwap: +(newPrices[i] - rand(2, 8)).toFixed(2),
+          vol: Math.floor(rand(20, 90)),
+          ema20: ema20arr[i], ema50: ema50arr[i],
+          bbUpper: upper[i], bbLower: lower[i], bbMid: mid[i],
+          rsi: rsiArr[i], macd: macd[i], macdSignal: signal[i], macdHist: hist[i],
+        }))
+        const nowStr = nowT()
+        if (nowStr !== last.time) {
+          const np = +(last.value + delta).toFixed(2)
+          const allP = [...newPrices, np]
+          updated.push({
+            time: nowStr, value: np,
+            vwap: +(np - rand(2,8)).toFixed(2), vol: Math.floor(rand(20,90)),
+            ema20: calcEMA(allP,20)[allP.length-1], ema50: calcEMA(allP,50)[allP.length-1],
+            bbUpper: calcBollinger(allP,20).upper[allP.length-1],
+            bbLower: calcBollinger(allP,20).lower[allP.length-1],
+            bbMid:   calcBollinger(allP,20).mid[allP.length-1],
+            rsi:     calcRSI(allP,14)[allP.length-1],
+            macd:    calcMACD(allP).macd[allP.length-1],
+            macdSignal: calcMACD(allP).signal[allP.length-1],
+            macdHist:   calcMACD(allP).hist[allP.length-1],
+          })
+          return updated.slice(-60)
+        }
+        return updated
+      })
+      setPositions(prev => prev.map(p =>
+        p.symbol === symbol ? { ...p, current: +(p.current + rand(-10, 12)).toFixed(2) } : p
+      ))
+      setPulse(v => !v)
+      // drift scenarios
+      setScenarios(prev => prev.map(sc => ({
+        ...sc,
+        relevance: Math.min(99, Math.max(5, sc.relevance + Math.floor(rand(-2, 3)))),
+      })))
+    }, 1500)
+    return () => clearInterval(t)
+  }, [symbol, loopRunning])
 
   // AI refresh every 30s
   useEffect(() => {
@@ -492,6 +509,7 @@ export default function LiveTradingPage() {
 
   // agent loop every 2.2s
   useEffect(() => {
+    if (!loopRunning) return
     const t = setInterval(() => {
       setAgentStep(step => {
         const idx   = step % AGENTS.length
@@ -515,7 +533,7 @@ export default function LiveTradingPage() {
       })
     }, 2200)
     return () => clearInterval(t)
-  }, [symbol])
+  }, [symbol, loopRunning])
 
   const latest = candles[candles.length - 1]
   const prev2  = candles[candles.length - 2]
@@ -537,12 +555,19 @@ export default function LiveTradingPage() {
               <span className="font-mono text-[10px] uppercase tracking-widest text-gray-500">Live Trading Room</span>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="hidden sm:flex items-center gap-4 font-mono text-xs">
               <span suppressHydrationWarning className={up ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
                 {symbol} {latest ? fmt(latest.value) : '—'} {up ? '▲' : '▼'} {Math.abs(+pct)}%
               </span>
             </div>
+            <button
+              onClick={() => setLoopRunning(v => !v)}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[10px] transition-colors ${loopRunning ? 'border-emerald-200 text-emerald-600 hover:bg-emerald-50' : 'border-amber-200 text-amber-600 hover:bg-amber-50'}`}
+            >
+              {loopRunning ? <Pause className="size-3" /> : <Play className="size-3" />}
+              {loopRunning ? 'Pause' : 'Resume'}
+            </button>
             <span suppressHydrationWarning className={`flex items-center gap-1.5 font-mono text-[10px] ${pulse ? 'text-emerald-500' : 'text-emerald-400'}`}>
               <span className={`size-2 rounded-full ${pulse ? 'bg-emerald-500' : 'bg-emerald-300'} transition-colors`} />
               Streaming
@@ -591,99 +616,139 @@ export default function LiveTradingPage() {
           </div>
 
           {/* main grid */}
-          <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-            {/* left */}
+          <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+            {/* ── left col ── */}
             <div className="flex flex-col gap-4">
 
-              {/* professional trading chart card */}
-              <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-                {/* chart control toolbar */}
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
-                  <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
+              {/* chart card */}
+              <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex gap-1">
                     {(['price','rsi','macd'] as const).map(tab => (
                       <button key={tab} onClick={() => setActiveTab(tab)}
-                        className={`rounded px-3 py-1 font-mono text-xs font-medium transition-all ${
-                          activeTab === tab ? 'bg-white text-gray-900 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-900'
+                        className={`rounded px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+                          activeTab === tab ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700'
                         }`}>
-                        {tab === 'price' ? 'Candlestick Chart' : tab.toUpperCase()}
+                        {tab === 'price' ? 'Price' : tab.toUpperCase()}
                       </button>
                     ))}
                   </div>
-
                   {activeTab === 'price' && (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mr-1">Overlays:</span>
-                      {([['ema20','EMA 20','#f97316'],['ema50','EMA 50','#c084fc'],['bb','Bollinger Bands','#94a3b8'],['vwap','VWAP','#818cf8']] as const).map(([k, label, colorHex]) => {
-                        const active = showIndicators[k as keyof typeof showIndicators]
-                        return (
-                          <button key={k} onClick={() => setShowIndicators(s => ({ ...s, [k]: !s[k as keyof typeof s] }))}
-                            className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] transition-all border ${
-                              active ? 'bg-gray-900 text-white border-gray-900' : 'bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-300'
-                            }`}>
-                            <span className="size-1.5 rounded-full" style={{ backgroundColor: active ? colorHex : '#cbd5e1' }} />
-                            {label}
-                          </button>
-                        )
-                      })}
+                    <div className="flex gap-2">
+                      {([['ema20','EMA20','text-orange-500'],['ema50','EMA50','text-purple-500'],['bb','BB','text-gray-400'],['vwap','VWAP','text-indigo-500']] as const).map(([k, label, color]) => (
+                        <button key={k} onClick={() => setShowIndicators(s => ({ ...s, [k]: !s[k as keyof typeof s] }))}
+                          className={`rounded border px-2 py-0.5 font-mono text-[9px] transition-colors ${
+                            showIndicators[k as keyof typeof showIndicators] ? `border-current ${color}` : 'border-gray-200 text-gray-300'
+                          }`}>
+                          {label}
+                        </button>
+                      ))}
                     </div>
                   )}
-
-                  <div className="flex items-center gap-2">
-                    <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 font-mono text-[10px] text-emerald-600 border border-emerald-200/60 font-semibold">
-                      <Activity className="size-3 animate-pulse" /> WebSocket Live
-                    </span>
-                  </div>
+                  <span className="flex items-center gap-1 font-mono text-[10px] text-emerald-500">
+                    <Activity className="size-3" /> Live
+                  </span>
                 </div>
 
-                {/* chart canvas view */}
                 {activeTab === 'price' && (
-                  <TVPriceChart data={candles} showIndicators={showIndicators} />
+                  <ResponsiveContainer width="100%" height={300}>
+                    <ComposedChart data={candles} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+                      <defs>
+                        <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10b981" stopOpacity={0.15} />
+                          <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="#f5f5f5" strokeDasharray="2 4" vertical={false} />
+                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} interval="preserveStartEnd" />
+                      <YAxis domain={['auto','auto']} tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={72} />
+                      <Tooltip content={<ChartTooltip />} />
+                      {showIndicators.bb && <Area type="monotone" dataKey="bbUpper" stroke="#d1d5db" strokeWidth={1} fill="none" dot={false} isAnimationActive={false} strokeDasharray="3 3" />}
+                      {showIndicators.bb && <Area type="monotone" dataKey="bbLower" stroke="#d1d5db" strokeWidth={1} fill="none" dot={false} isAnimationActive={false} strokeDasharray="3 3" />}
+                      <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#pg)" dot={false} isAnimationActive={false} />
+                      {showIndicators.vwap  && <Line type="monotone" dataKey="vwap"  stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} strokeDasharray="4 3" />}
+                      {showIndicators.ema20 && <Line type="monotone" dataKey="ema20" stroke="#f97316" strokeWidth={1.5} dot={false} isAnimationActive={false} />}
+                      {showIndicators.ema50 && <Line type="monotone" dataKey="ema50" stroke="#a855f7" strokeWidth={1.5} dot={false} isAnimationActive={false} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
                 )}
-                {activeTab === 'rsi' && (
-                  <div className="space-y-2">
-                    <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
-                      RSI (14) Relative Strength Indicator — Overbought Zone &gt;70 · Oversold Zone &lt;30
-                    </p>
-                    <TVRSIChart data={candles} />
-                  </div>
-                )}
-                {activeTab === 'macd' && (
-                  <div className="space-y-2">
-                    <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
-                      MACD (12,26,9) Moving Average Convergence Divergence — Blue: MACD · Orange: Signal · Green/Red: Histogram
-                    </p>
-                    <TVMACDChart data={candles} />
-                  </div>
-                )}
+                {activeTab === 'rsi'  && <><p className="mb-1 font-mono text-[9px] text-gray-400">RSI (14) — Overbought &gt;70 · Oversold &lt;30</p><RSIPanel  data={candles} /></>}
+                {activeTab === 'macd' && <><p className="mb-1 font-mono text-[9px] text-gray-400">MACD (12,26,9) — Blue: MACD · Orange: Signal · Green: Histogram</p><MACDPanel data={candles} /></>}
               </div>
 
               {/* agent pipeline */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Agent Pipeline</p>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Agent Pipeline · Observe → Reason → Execute → Adapt</p>
+                  <span className={`font-mono text-[9px] ${loopRunning ? 'text-emerald-500' : 'text-amber-500'}`}>
+                    {loopRunning ? '● Running' : '⏸ Paused'}
+                  </span>
+                </div>
                 <div className="flex items-center">
                   {AGENTS.map((a, i) => {
                     const active = i === agentStep % AGENTS.length
                     const done   = i < agentStep % AGENTS.length
+                    const Icon   = AGENT_ICONS[i]
                     return (
                       <div key={a} className="flex flex-1 items-center">
                         <div className={`flex flex-1 flex-col items-center gap-1 rounded-md border px-1 py-2.5 text-center transition-all ${
                           active ? 'border-emerald-400 bg-emerald-50' : done ? 'border-gray-200 bg-gray-50' : 'border-gray-100 bg-white'
                         }`}>
-                          {active ? <Cpu className="size-3.5 text-emerald-500 animate-pulse" />
-                            : done ? <CheckCircle2 className="size-3.5 text-gray-400" />
+                          {active
+                            ? <Icon className="size-3.5 text-emerald-500 animate-pulse" />
+                            : done
+                            ? <CheckCircle2 className="size-3.5 text-gray-400" />
                             : <Circle className="size-3.5 text-gray-200" />}
                           <span className={`font-mono text-[9px] uppercase tracking-wide ${active ? 'text-emerald-600 font-semibold' : 'text-gray-400'}`}>{a}</span>
                         </div>
-                        {i < AGENTS.length - 1 && <div className={`h-px w-2 shrink-0 ${done || active ? 'bg-emerald-300' : 'bg-gray-200'}`} />}
+                        {i < AGENTS.length - 1 && (
+                          <div className={`h-px w-2 shrink-0 ${done || active ? 'bg-emerald-300' : 'bg-gray-200'}`} />
+                        )}
                       </div>
                     )
                   })}
                 </div>
+                {/* loop stage labels */}
+                <div className="mt-2 flex justify-between px-1">
+                  {['Observe', 'Interpret', 'Risk', 'Allocate', 'Execute'].map(l => (
+                    <span key={l} className="font-mono text-[8px] text-gray-300 uppercase tracking-wider">{l}</span>
+                  ))}
+                </div>
               </div>
+
+              {/* decision history */}
+              {decisionHistory.length > 0 && (
+                <div className="rounded-lg border border-gray-200 bg-white p-4">
+                  <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Decision Lifecycle · Version History</p>
+                  <div className="flex flex-col gap-1.5">
+                    {decisionHistory.map((d, i) => (
+                      <div key={d.id} className={`flex items-center gap-3 rounded-md border px-3 py-2 text-xs ${
+                        d.status === 'VALID' ? 'border-emerald-200 bg-emerald-50' :
+                        d.status === 'INVALIDATED' ? 'border-rose-100 bg-rose-50' :
+                        'border-gray-100 bg-gray-50'
+                      }`}>
+                        <span className="font-mono text-[10px] text-gray-400">#{d.id}</span>
+                        <span className={`font-mono font-semibold ${
+                          d.action === 'BUY' ? 'text-emerald-600' :
+                          d.action === 'SELL' || d.action === 'EXIT' ? 'text-rose-600' : 'text-amber-600'
+                        }`}>{d.action}</span>
+                        <span className="font-mono text-[10px] text-gray-500">{d.confidence}%</span>
+                        <span className="flex-1 truncate text-gray-500">{d.reason}</span>
+                        <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${
+                          d.status === 'VALID' ? 'bg-emerald-100 text-emerald-600' :
+                          d.status === 'INVALIDATED' ? 'bg-rose-100 text-rose-600' :
+                          'bg-gray-100 text-gray-400'
+                        }`}>{d.status}</span>
+                        <span className="font-mono text-[9px] text-gray-300">{d.ts}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* order blotter */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Order Blotter · Live</p>
+                <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Order Blotter · Simulated Execution</p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead>
@@ -714,20 +779,82 @@ export default function LiveTradingPage() {
               </div>
             </div>
 
-            {/* right col */}
+            {/* ── right col ── */}
             <div className="flex flex-col gap-4">
 
-              {/* AI suggestion */}
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Bot className="size-4 text-gray-400" />
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Groq AI Suggestion</p>
-                  </div>
-                  <span className="font-mono text-[9px] text-gray-300">Updates every 30s</span>
-                </div>
-                <SuggestionCard s={suggestion} onRefresh={() => fetchSuggestion(candles)} />
+              {/* right panel tabs */}
+              <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+                {([['decision', 'Decision', Bot], ['scenarios', 'Scenarios', Layers3], ['signals', 'Signals', BarChart2]] as const).map(([id, label, Icon]) => (
+                  <button key={id} onClick={() => setActivePanel(id)}
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+                      activePanel === id ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                    }`}>
+                    <Icon className="size-3" />{label}
+                  </button>
+                ))}
               </div>
+
+              {/* decision card */}
+              {activePanel === 'decision' && (
+                <div className="rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bot className="size-4 text-gray-400" />
+                      <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Groq AI Decision</p>
+                    </div>
+                    <span className="font-mono text-[9px] text-gray-300">Updates every 30s</span>
+                  </div>
+                  <DecisionCard s={suggestion} onRefresh={() => fetchSuggestion(candles)} />
+                </div>
+              )}
+
+              {/* scenario readiness */}
+              {activePanel === 'scenarios' && (
+                <div className="rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Layers3 className="size-4 text-gray-400" />
+                      <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Scenario Readiness</p>
+                    </div>
+                    <span className="font-mono text-[9px] text-gray-300">Live monitoring</span>
+                  </div>
+                  <ScenarioPanel scenarios={scenarios} currentAction={suggestion?.action ?? 'WATCH'} />
+                </div>
+              )}
+
+              {/* signal fusion */}
+              {activePanel === 'signals' && (
+                <div className="rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <BarChart2 className="size-4 text-gray-400" />
+                      <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Signal Fusion</p>
+                    </div>
+                    <span className="font-mono text-[9px] text-gray-300">Evidence alignment</span>
+                  </div>
+                  <SignalFusion
+                    tech={signalFusion.tech}
+                    liquidity={signalFusion.liquidity}
+                    news={signalFusion.news}
+                    crossAsset={signalFusion.crossAsset}
+                  />
+                  <div className="mt-4 border-t border-gray-100 pt-3">
+                    <p className="font-mono text-[9px] uppercase tracking-wider text-gray-400">Conflict level</p>
+                    <p className={`mt-1 font-mono text-sm font-semibold ${
+                      Math.max(signalFusion.tech, signalFusion.liquidity, signalFusion.news, signalFusion.crossAsset) -
+                      Math.min(signalFusion.tech, signalFusion.liquidity, signalFusion.news, signalFusion.crossAsset) > 30
+                        ? 'text-rose-500' : 'text-amber-500'
+                    }`}>
+                      {Math.max(signalFusion.tech, signalFusion.liquidity, signalFusion.news, signalFusion.crossAsset) -
+                       Math.min(signalFusion.tech, signalFusion.liquidity, signalFusion.news, signalFusion.crossAsset) > 30
+                        ? 'HIGH conflict' : 'MODERATE conflict'}
+                    </p>
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      Conviction moderated where evidence sources disagree. Resolved decision: {suggestion?.action ?? 'WATCH'}.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* positions */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -760,13 +887,13 @@ export default function LiveTradingPage() {
                 </div>
               </div>
 
-              {/* agent log */}
+              {/* agent activity log */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Agent Activity</p>
                   <span className="font-mono text-[10px] text-gray-300">{logs.length} events</span>
                 </div>
-                <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto pr-1">
+                <div className="flex max-h-56 flex-col gap-0.5 overflow-y-auto pr-1">
                   {logs.length === 0 && <p className="py-4 text-center font-mono text-[10px] text-gray-300">Agents initialising…</p>}
                   {logs.map(l => (
                     <div key={l.id} className="flex gap-2 rounded px-2 py-1 hover:bg-gray-50">
@@ -783,7 +910,7 @@ export default function LiveTradingPage() {
                 </div>
               </div>
 
-              {/* risk */}
+              {/* risk summary */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Risk Summary</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -791,6 +918,15 @@ export default function LiveTradingPage() {
                     <div key={l} className="rounded-md border border-gray-100 p-2">
                       <p className="font-mono text-[9px] text-gray-400">{l}</p>
                       <p className={`mt-0.5 font-mono text-sm font-semibold ${c}`}>{v}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 border-t border-gray-100 pt-3">
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-gray-400 mb-1.5">Hard constraints</p>
+                  {['Stop-loss validated', 'Capital ceiling respected', 'Daily loss limit clear'].map(r => (
+                    <div key={r} className="flex items-center gap-1.5 py-0.5">
+                      <CheckCheck className="size-3 text-emerald-500" />
+                      <span className="text-[10px] text-gray-500">{r}</span>
                     </div>
                   ))}
                 </div>

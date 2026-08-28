@@ -24,7 +24,6 @@ import {
   PanelLeft,
   Pause,
   Play,
-  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -381,7 +380,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
       fetch(`${BACKEND}/api/agent/portfolio`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setAgentPortfolio(d))
-        .catch(() => {});
+        .catch(() => { });
     });
 
     return () => {
@@ -412,174 +411,174 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
   // Positions: from live portfolio or fall back to seed
   const livePositionRows: string[][] = agentPortfolio?.open_positions?.length
     ? agentPortfolio.open_positions.map((p: any) => [
-        p.asset.toUpperCase(),
-        "Long",
-        `₹${Number(p.entry_price).toLocaleString("en-IN")}`,
-        liveData[p.asset]?.price ||
-          `₹${Number(p.entry_price).toLocaleString("en-IN")}`,
-        "—",
-        `₹${Number(p.entry_amount_inr).toLocaleString("en-IN")}`,
-        p.unrealized_pnl != null
-          ? `₹${Number(p.unrealized_pnl).toFixed(2)}`
-          : "—",
-        "—",
-        "—",
-        "OPEN",
-      ])
+      p.asset.toUpperCase(),
+      "Long",
+      `₹${Number(p.entry_price).toLocaleString("en-IN")}`,
+      liveData[p.asset]?.price ||
+      `₹${Number(p.entry_price).toLocaleString("en-IN")}`,
+      "—",
+      `₹${Number(p.entry_amount_inr).toLocaleString("en-IN")}`,
+      p.unrealized_pnl != null
+        ? `₹${Number(p.unrealized_pnl).toFixed(2)}`
+        : "—",
+      "—",
+      "—",
+      "OPEN",
+    ])
     : [
-        [
-          "NIFTY 50",
-          "Long",
-          "22,402",
-          liveData.nifty.price,
-          "24",
-          "₹537,648",
-          "+₹1,363",
-          "22,680",
-          "22,240",
-          "WATCH",
-        ],
-        [
-          "GOLD",
-          "Long",
-          "72,080",
-          liveData.gold.price,
-          "2",
-          "₹144,160",
-          "+₹676",
-          "73,400",
-          "71,500",
-          "BUY",
-        ],
-      ];
+      [
+        "NIFTY 50",
+        "Long",
+        "22,402",
+        liveData.nifty.price,
+        "24",
+        "₹537,648",
+        "+₹1,363",
+        "22,680",
+        "22,240",
+        "WATCH",
+      ],
+      [
+        "GOLD",
+        "Long",
+        "72,080",
+        liveData.gold.price,
+        "2",
+        "₹144,160",
+        "+₹676",
+        "73,400",
+        "71,500",
+        "BUY",
+      ],
+    ];
 
   // Decisions/history: from live decisions or fall back to seed
   const liveDecisionRows: string[][] = agentDecisions.length
     ? agentDecisions
-        .slice(0, 10)
-        .map((d: any, i: number) => [
-          `#${d.id}`,
-          new Date(d.created_at).toLocaleTimeString("en-IN"),
-          (d.asset || "").toUpperCase(),
-          d.action,
-          `${Math.round((d.confidence || 0) * 100)}%`,
-          "Moderate",
-          `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
-          i === 0 ? "ACTIVE" : "SUPERSEDED",
-          (d.reasoning || "").slice(0, 50),
-        ])
+      .slice(0, 10)
+      .map((d: any, i: number) => [
+        `#${d.id}`,
+        new Date(d.created_at).toLocaleTimeString("en-IN"),
+        (d.asset || "").toUpperCase(),
+        d.action,
+        `${Math.round((d.confidence || 0) * 100)}%`,
+        "Moderate",
+        `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
+        i === 0 ? "ACTIVE" : "SUPERSEDED",
+        (d.reasoning || "").slice(0, 50),
+      ])
     : [
-        [
-          "#144",
-          "10:32:10",
-          "NIFTY",
-          "WATCH",
-          "72%",
-          "Moderate",
-          "₹0",
-          "ACTIVE",
-          "Liquidity deterioration",
-        ],
-        [
-          "#143",
-          "10:28:44",
-          "NIFTY",
-          "HOLD",
-          "78%",
-          "Moderate",
-          "₹0",
-          "SUPERSEDED",
-          "Breadth confirmation",
-        ],
-        [
-          "#142",
-          "09:55:02",
-          "GOLD",
-          "BUY",
-          "81%",
-          "Low",
-          "₹16,000",
-          "ACTIVE",
-          "Risk-adjusted opportunity",
-        ],
-      ];
+      [
+        "#144",
+        "10:32:10",
+        "NIFTY",
+        "WATCH",
+        "72%",
+        "Moderate",
+        "₹0",
+        "ACTIVE",
+        "Liquidity deterioration",
+      ],
+      [
+        "#143",
+        "10:28:44",
+        "NIFTY",
+        "HOLD",
+        "78%",
+        "Moderate",
+        "₹0",
+        "SUPERSEDED",
+        "Breadth confirmation",
+      ],
+      [
+        "#142",
+        "09:55:02",
+        "GOLD",
+        "BUY",
+        "81%",
+        "Low",
+        "₹16,000",
+        "ACTIVE",
+        "Risk-adjusted opportunity",
+      ],
+    ];
 
   // Capital: from live portfolio
   const capital = agentPortfolio?.capital;
   const liveCapitalRows: string[][] = agentDecisions.length
     ? agentDecisions
-        .slice(0, 5)
-        .map((d: any) => [
-          (d.asset || "").toUpperCase(),
-          d.action,
-          `${Math.round((d.confidence || 0) * 100)}`,
-          "—",
-          "—",
-          "—",
-          `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
-          `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
-          d.action === "BUY"
-            ? "Approved"
-            : d.action === "HOLD"
-              ? "Waiting"
-              : "Executed",
-        ])
+      .slice(0, 5)
+      .map((d: any) => [
+        (d.asset || "").toUpperCase(),
+        d.action,
+        `${Math.round((d.confidence || 0) * 100)}`,
+        "—",
+        "—",
+        "—",
+        `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
+        `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
+        d.action === "BUY"
+          ? "Approved"
+          : d.action === "HOLD"
+            ? "Waiting"
+            : "Executed",
+      ])
     : [
-        ["NIFTY", "WATCH", "72", "58", "Moderate", "—", "₹0", "₹0", "Waiting"],
-        [
-          "Gold",
-          "BUY",
-          "81",
-          "42",
-          "High",
-          "2.1R",
-          "₹20,000",
-          "₹16,000",
-          "Approved",
-        ],
-        ["USD", "AVOID", "31", "67", "Moderate", "—", "₹0", "₹0", "Rejected"],
-      ];
+      ["NIFTY", "WATCH", "72", "58", "Moderate", "—", "₹0", "₹0", "Waiting"],
+      [
+        "Gold",
+        "BUY",
+        "81",
+        "42",
+        "High",
+        "2.1R",
+        "₹20,000",
+        "₹16,000",
+        "Approved",
+      ],
+      ["USD", "AVOID", "31", "67", "Moderate", "—", "₹0", "₹0", "Rejected"],
+    ];
 
   // Execution: from live decisions
   const liveExecutionRows: string[][] = agentDecisions.length
     ? agentDecisions
-        .slice(0, 10)
-        .map((d: any) => [
-          new Date(d.created_at).toLocaleTimeString("en-IN"),
-          (d.asset || "").toUpperCase(),
-          d.action,
-          "—",
-          `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
-          d.action === "BUY" ? liveData[d.asset]?.price || "—" : "—",
-          "0.00%",
-          "₹0",
-          `#${d.id}`,
-          d.action === "BUY" ? "FILLED" : d.action === "HOLD" ? "NO ACTION" : "REJECTED",
-        ])
+      .slice(0, 10)
+      .map((d: any) => [
+        new Date(d.created_at).toLocaleTimeString("en-IN"),
+        (d.asset || "").toUpperCase(),
+        d.action,
+        "—",
+        `₹${Number(d.amount_inr || 0).toLocaleString("en-IN")}`,
+        d.action === "BUY" ? liveData[d.asset]?.price || "—" : "—",
+        "0.00%",
+        "₹0",
+        `#${d.id}`,
+        d.action === "BUY" ? "FILLED" : d.action === "HOLD" ? "NO ACTION" : "REJECTED",
+      ])
     : [
-        ["14:28:44", "GOLD", "BUY", "2", "72,410", liveData.gold.price, "0.01%", "₹18", "#142", "FILLED"],
-        ["14:16:50", "NIFTY", "HOLD", "—", "—", "—", "—", "—", "#143", "NO ACTION"],
-        ["13:14:21", "USD/INR", "BUY", "—", "83.42", "—", "—", "—", "#139", "REJECTED"],
-      ];
+      ["14:28:44", "GOLD", "BUY", "2", "72,410", liveData.gold.price, "0.01%", "₹18", "#142", "FILLED"],
+      ["14:16:50", "NIFTY", "HOLD", "—", "—", "—", "—", "—", "#143", "NO ACTION"],
+      ["13:14:21", "USD/INR", "BUY", "—", "83.42", "—", "—", "—", "#139", "REJECTED"],
+    ];
 
   // Outcomes: from live closed positions
   const liveOutcomesRows: string[][] = agentPortfolio?.closed_positions?.length
     ? agentPortfolio.closed_positions.slice(0, 10).map((p: any) => [
-        `#${p.decision_id}`,
-        (p.asset || "").toUpperCase(),
-        "EXIT",
-        "Target/Stop Hit",
-        "Observed",
-        p.realized_pnl && Number(p.realized_pnl) > 0 ? "Realized" : "Stopped",
-        `₹${Number(p.realized_pnl || 0).toFixed(2)}`,
-        "No",
-        "—",
-      ])
+      `#${p.decision_id}`,
+      (p.asset || "").toUpperCase(),
+      "EXIT",
+      "Target/Stop Hit",
+      "Observed",
+      p.realized_pnl && Number(p.realized_pnl) > 0 ? "Realized" : "Stopped",
+      `₹${Number(p.realized_pnl || 0).toFixed(2)}`,
+      "No",
+      "—",
+    ])
     : [
-        ["#131", "NIFTY", "BUY", "Bullish breakout", "Liquidity breakdown", "Reduced", "+₹840", "Yes", "Liquidity collapsed faster"],
-        ["#128", "GOLD", "BUY", "Trend continuation", "Trend continuation", "Realized", "+₹2,240", "No", "—"],
-        ["#124", "USD", "AVOID", "Risk-off", "Risk-off", "Avoided", "₹0", "No", "—"],
-      ];
+      ["#131", "NIFTY", "BUY", "Bullish breakout", "Liquidity breakdown", "Reduced", "+₹840", "Yes", "Liquidity collapsed faster"],
+      ["#128", "GOLD", "BUY", "Trend continuation", "Trend continuation", "Realized", "+₹2,240", "No", "—"],
+      ["#124", "USD", "AVOID", "Risk-off", "Risk-off", "Avoided", "₹0", "No", "—"],
+    ];
 
   const pageRows: Record<string, { headers: string[]; rows: string[][] }> = {
 
@@ -1090,7 +1089,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                       </div>
                     </div>
                   </Section>
-                  
+
                   <div className="grid gap-6 md:grid-cols-4">
                     <Metric
                       label="Market status"
@@ -1165,26 +1164,27 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                       const telemetry = agentTelemetry.find(t => t.node === node.id);
                       const isActive = telemetry !== undefined;
                       const isRecent = isActive && (Date.now() - new Date(telemetry.ts).getTime()) < 5000;
-                      
+
                       return (
-                      <button
-                        key={node.id}
-                        className={`border p-4 text-left transition-all duration-500 ${isActive ? (isRecent ? "border-primary bg-primary/20 shadow-[0_0_15px_rgba(var(--primary),0.5)]" : "border-primary/50 bg-primary/10") : "border-border bg-card opacity-50"}`}
-                      >
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {i < 9 ? `0${i + 1}` : i + 1}
-                        </span>
-                        <p className={`mt-3 text-sm font-semibold ${isActive ? "text-primary" : ""}`}>{node.label}</p>
-                        <p className={`mt-1 text-xs ${isActive ? "text-emerald-500" : "text-muted-foreground"}`}>
-                          {isActive ? `Completed · ${new Date(telemetry.ts).toLocaleTimeString('en-IN')}` : 'Waiting...'}
-                        </p>
-                        {isActive && telemetry.asset && (
-                          <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-primary/70">
-                            CTX: {telemetry.asset}
+                        <button
+                          key={node.id}
+                          className={`border p-4 text-left transition-all duration-500 ${isActive ? (isRecent ? "border-primary bg-primary/20 shadow-[0_0_15px_rgba(var(--primary),0.5)]" : "border-primary/50 bg-primary/10") : "border-border bg-card opacity-50"}`}
+                        >
+                          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {i < 9 ? `0${i + 1}` : i + 1}
+                          </span>
+                          <p className={`mt-3 text-sm font-semibold ${isActive ? "text-primary" : ""}`}>{node.label}</p>
+                          <p className={`mt-1 text-xs ${isActive ? "text-emerald-500" : "text-muted-foreground"}`}>
+                            {isActive ? `Completed · ${new Date(telemetry.ts).toLocaleTimeString('en-IN')}` : 'Waiting...'}
                           </p>
-                        )}
-                      </button>
-                    )})}
+                          {isActive && telemetry.asset && (
+                            <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-primary/70">
+                              CTX: {telemetry.asset}
+                            </p>
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                 </Section>
                 <div className="mt-8 grid gap-6 lg:grid-cols-2">
@@ -1362,16 +1362,16 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                   {(agentNews.length > 0
                     ? agentNews
                     : news.map((n) => ({
-                        id: n.title,
-                        title: n.title,
-                        source: n.source,
-                        signal: {
-                          sentiment: "neutral",
-                          impact_score: 0.3,
-                          confidence: 0.84,
-                          reasoning: "",
-                        },
-                      }))
+                      id: n.title,
+                      title: n.title,
+                      source: n.source,
+                      signal: {
+                        sentiment: "neutral",
+                        impact_score: 0.3,
+                        confidence: 0.84,
+                        reasoning: "",
+                      },
+                    }))
                   ).map((n: any) => (
                     <div
                       key={n.id}
@@ -1573,6 +1573,147 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
         </div>
       )}
     </div>
+  );
+
+}
+
+export { AxiomDashboard };
+"Risk",
+  "Notifications",
+  "Agent",
+  "Appearance",
+                  ].map((n) => (
+    <div key={n} className="border border-border bg-card p-4">
+      <div className="flex justify-between">
+        <p className="text-sm font-semibold">{n}</p>
+        <span className="font-mono text-[10px] text-emerald-500">
+          Configured
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Manage preferences
+      </p>
+      <button className="mt-4 text-xs text-primary">
+        Configure <ChevronRight className="inline size-3" />
+      </button>
+    </div>
+  ))}
+                </div >
+              </Section >
+            )}
+{/* The old Selected asset section was moved and redesigned. */ }
+<div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+  <span className="flex items-center gap-2">
+    <span className="size-1.5 rounded-full bg-emerald-500" /> Data
+    feed connected · 3 sources
+  </span>
+  <span suppressHydrationWarning>Last sync {new Date().toLocaleTimeString('en-IN', { hour12: false })} IST</span>
+  <span>Paper trading mode</span>
+</div>
+          </div >
+        </main >
+      </div >
+  { search && (
+    <div
+      className="fixed inset-0 z-40 bg-foreground/20 p-4 pt-24"
+      onClick={() => setSearch(false)}
+    >
+      <div
+        className="mx-auto max-w-lg border border-border bg-popover shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 border-b border-border p-4">
+          <Search className="size-4 text-muted-foreground" />
+          <input
+            autoFocus
+            placeholder="Search assets, decisions, scenarios..."
+            className="flex-1 bg-transparent text-sm outline-none"
+          />
+          <button onClick={() => setSearch(false)}>
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="p-3">
+          {[
+            "NIFTY 50",
+            "Decision #144",
+            "Liquidity breakdown",
+            "Risk center",
+          ].map((x) => (
+            <button
+              key={x}
+              onClick={() => setSearch(false)}
+              className="flex w-full items-center gap-3 p-2 text-left text-xs hover:bg-muted"
+            >
+              <Command className="size-3.5 text-muted-foreground" />
+              {x}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )}
+{
+  notifications && (
+    <div className="fixed right-4 top-16 z-40 w-80 border border-border bg-popover p-4 shadow-xl">
+      <div className="flex justify-between text-sm font-semibold">
+        Notifications{" "}
+        <button onClick={() => setNotifications(false)}>
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="mt-4 border-t border-border pt-3 text-xs">
+        <span className="text-amber-500">Decision changed</span>
+        <p className="mt-1 text-muted-foreground">
+          NIFTY HOLD → WATCH · 27 sec ago
+        </p>
+        <p className="mt-2">Liquidity deteriorated.</p>
+      </div>
+    </div>
+  )
+}
+{
+  stop && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/25 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-full max-w-sm border border-border bg-popover p-5 shadow-xl"
+      >
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-1 size-5 text-destructive" />
+          <div>
+            <h2 className="text-sm font-semibold">
+              Emergency stop simulation?
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              This pauses simulated execution while observation and analysis
+              continue.
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={() => setStop(false)}
+            className="border border-border px-3 py-2 text-xs"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              setStream(false);
+              setStop(false);
+            }}
+            className="bg-destructive px-3 py-2 text-xs text-destructive-foreground"
+          >
+            Confirm stop
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+    </div >
   );
 
 }

@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { symbol, price, change, rsi, macd, signal, ema20, ema50, bbUpper, bbLower, vwap, volume } = body
 
-  const prompt = `You are a professional quantitative trading analyst. Analyze the following live market data and provide a concise trading recommendation.
+  const prompt = `You are an autonomous financial decision agent. Your role is NOT to predict exact future prices. Instead, assess the current market state and produce a condition-aware decision that remains valid only while specific conditions hold.
 
 Symbol: ${symbol}
 Current Price: ${price}
@@ -21,14 +21,16 @@ Volume: ${volume}K
 
 Respond in this exact JSON format (no markdown, no extra text):
 {
-  "action": "BUY" or "SELL" or "HOLD",
+  "action": "BUY" or "SELL" or "HOLD" or "WATCH" or "REDUCE" or "EXIT",
   "confidence": number between 0-100,
   "entry": suggested entry price as number,
   "target": price target as number,
   "stopLoss": stop loss price as number,
-  "reasoning": "2-3 sentence explanation",
+  "reasoning": "2-3 sentence explanation of current market state, not a price prediction",
   "riskLevel": "LOW" or "MEDIUM" or "HIGH",
-  "trend": "BULLISH" or "BEARISH" or "NEUTRAL"
+  "trend": "BULLISH" or "BEARISH" or "NEUTRAL",
+  "validityConditions": ["up to 3 short conditions that must remain true for this decision to stay valid"],
+  "invalidationConditions": ["up to 3 short conditions that would immediately invalidate this decision"]
 }`
 
   const res = await fetch(GROQ_API, {
@@ -38,7 +40,7 @@ Respond in this exact JSON format (no markdown, no extra text):
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'groq/compound',
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 300,
       temperature: 0.3,

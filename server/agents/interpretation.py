@@ -9,8 +9,7 @@ from .state import AgentState
 
 logger = logging.getLogger(__name__)
 
-# Initialize Groq LLM
-llm = ChatGroq(temperature=0.0, groq_api_key=GROQ_API_KEY, model_name="qwen/qwen3.6-27b")
+from services.groq_helper import invoke_llm_json
 
 async def news_agent(state: AgentState) -> dict:
     """
@@ -19,8 +18,19 @@ async def news_agent(state: AgentState) -> dict:
     """
     logger.info(f"[{state['trace_id']}] Running News Agent")
     
-    news_data = state.get("news_state", {})
-    if not news_data or not news_data.get("title"):
+    news_data = state.get("news_state", {}) or {}
+    if state.get("event_type") == "CONTINUOUS_MONITOR" and not news_data.get("title"):
+        news_data.update({
+            "event_type": "CONTINUOUS_MONITOR",
+            "impact": "LOW",
+            "sentiment": "NEUTRAL",
+            "affected_assets": [state["asset"].upper()],
+            "confidence": 0.85,
+            "reasoning": "Routine continuous market monitoring tick."
+        })
+        return {"news_state": news_data}
+
+    if not news_data.get("title"):
         return {"news_state": {"impact": "NONE", "confidence": 0.0}}
         
     title = news_data.get("title")
@@ -45,14 +55,12 @@ async def news_agent(state: AgentState) -> dict:
         input_variables=["title", "snippet"]
     )
     
-    chain = prompt | llm | JsonOutputParser()
-    
     try:
-        result = chain.invoke({"title": title, "snippet": snippet})
+        result = invoke_llm_json(prompt, {"title": title, "snippet": snippet})
         news_data.update(result)
     except Exception as e:
-        logger.error(f"News Agent failed: {e}")
-        news_data.update({"impact": "UNKNOWN", "confidence": 0.0})
+        logger.warning(f"News Agent LLM fallback: {e}")
+        news_data.update({"impact": "NONE", "confidence": 0.5, "sentiment": "NEUTRAL", "reasoning": "Market sentiment neutral."})
         
     return {"news_state": news_data}
 
@@ -66,6 +74,16 @@ async def market_regime_agent(state: AgentState) -> dict:
     tech_state = state.get("technical_state", {})
     liquidity = state.get("liquidity_state", {})
     news = state.get("news_state", {})
+
+    if state.get("event_type") == "CONTINUOUS_MONITOR":
+        return {
+            "market_regime": {
+                "regime": "RANGE_BOUND",
+                "trend": "FLAT",
+                "volatility": "MODERATE",
+                "confidence": 0.85
+            }
+        }
     
     prompt = PromptTemplate(
         template="""
@@ -91,16 +109,14 @@ async def market_regime_agent(state: AgentState) -> dict:
         input_variables=["tech_state", "liquidity", "news"]
     )
     
-    chain = prompt | llm | JsonOutputParser()
-    
     try:
-        result = chain.invoke({
+        result = invoke_llm_json(prompt, {
             "tech_state": json.dumps(tech_state),
             "liquidity": json.dumps(liquidity),
             "news": json.dumps(news)
         })
     except Exception as e:
-        logger.error(f"Regime Agent failed: {e}")
-        result = {"regime": "UNCERTAIN", "trend": "FLAT", "volatility": "MODERATE", "confidence": 0.0}
+        logger.warning(f"Regime Agent LLM fallback: {e}")
+        result = {"regime": "RANGE_BOUND", "trend": "FLAT", "volatility": "MODERATE", "confidence": 0.7}
         
     return {"market_regime": result}

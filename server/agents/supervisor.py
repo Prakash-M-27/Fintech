@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 def should_reassess(state: AgentState) -> str:
     """
     Conditional edge: fast-path vs reasoning path.
-    Routes cycles through full agent reasoning pipeline so all 12 agents operate in real-time.
     """
+    event = state.get("event_type", "")
     liquidity = state.get("liquidity_state", {})
     
     # Fast path to Risk if liquidity breakdown
@@ -22,7 +22,15 @@ def should_reassess(state: AgentState) -> str:
         logger.info(f"[{state.get('trace_id')}] Fast path triggered: LIQUIDITY_BREAKDOWN")
         return "risk"
         
-    return "interpretation"
+    # Standard path for price ticks
+    if event == "PRICE_CHANGED":
+        return "outcome"
+        
+    # Reasoning path for News
+    if event == "NEWS_DETECTED":
+        return "interpretation"
+        
+    return "outcome"
 
 # ── Build the Graph ──
 graph_builder = StateGraph(AgentState)
