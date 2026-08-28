@@ -1,11 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
 
 from database import get_db
 from models import NiftyPrice, GoldPrice, USDPrice, PriceModel
-from schemas import MarketSnapshot, PriceOut
+from schemas import MarketSnapshot, PriceOut, CandleOut
 from services.cache import asset_cache_key, cache_get, cache_set, CACHE_TTL
+from config import TWELVEDATA_API_KEY
 
 router = APIRouter(prefix="/api", tags=["market"])
 
@@ -69,3 +71,62 @@ async def get_all_markets(db: AsyncSession = Depends(get_db)):
         except HTTPException:
             continue
     return snapshots
+
+
+SYMBOL_MAP = {
+    "nifty": "NIFTY",
+    "gold": "XAU/USD",
+    "usd": "USD/INR",
+}
+
+VALID_TIMEFRAMES = ["1min", "5min", "15min", "30min", "1h", "4h", "1day", "1week", "1month"]
+
+
+@router.get("/market/{asset}/candles", response_model=list[CandleOut])
+async def get_candles(
+    asset: str,
+    timeframe: str = Query("1min", description="Candle timeframe"),
+    limit: int = Query(200, description="Number of candles"),
+):
+    asset = asset.lower()
+    symbol = SYMBOL_MAP.get(asset)
+    if not symbol:
+        raise HTTPException(400, detail="Valid assets: nifty, gold, usd")
+    if timeframe not in VALID_TIMEFRAMES:
+        raise HTTPException(400, detail=f"Valid timeframes: {', '.join(VALID_TIMEFRAMES)}")
+
+    limit = max(1, min(limit, 500))
+    cache_key = f"candles:{asset}:{timeframe}:{limit}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": timeframe,
+        "outputsize": limit,
+        "apikey": TWELVEDATA_API_KEY,
+    }
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    values = data.get("values", [])
+    candles = [
+        CandleOut(
+            time=v["datetime"],
+            open=float(v["open"]),
+            high=float(v["high"]),
+            low=float(v["low"]),
+            close=float(v["close"]),
+            volume=int(v.get("volume", 0)),
+        )
+        for v in values
+    ]
+
+    candles.reverse()
+    await cache_set(cache_key, [c.model_dump() for c in candles], ttl=30)
+    return candles

@@ -9,141 +9,64 @@ import {
   PanelLeft, Settings2, ShieldCheck, TrendingDown, TrendingUp,
   Wallet, Zap, RefreshCw, Target,
 } from 'lucide-react'
-import { calcEMA, calcRSI, calcMACD, calcBollinger } from '@/lib/indicators'
+import { type OHLC, calcUTBotAlerts, calcFairValueGap, calcVolumeProfile } from '@/lib/indicators'
 import { TVPriceChart, TVRSIChart, TVMACDChart } from '@/components/tv-chart'
 
-// ── types ──────────────────────────────────────────────────────────────────
-type Candle = {
-  time: string; value: number; vwap: number; vol: number
-  ema20: number; ema50: number; bbUpper: number; bbLower: number; bbMid: number
-  rsi: number; macd: number; macdSignal: number; macdHist: number
-}
 type Order = { id: string; side: 'BUY' | 'SELL'; qty: number; price: number; status: 'FILLED' | 'PENDING' | 'CANCELLED'; ts: string }
 type AgentLog = { id: number; ts: string; agent: string; msg: string; tone: 'green' | 'amber' | 'red' | 'blue' }
 type Position = { symbol: string; qty: number; entry: number; current: number }
 type AISuggestion = {
-  action: 'BUY' | 'SELL' | 'HOLD'
-  confidence: number
-  entry: number
-  target: number
-  stopLoss: number
-  reasoning: string
-  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
-  trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
-  loading?: boolean
+  action: 'BUY' | 'SELL' | 'HOLD'; confidence: number; entry: number; target: number; stopLoss: number
+  reasoning: string; riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'; trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; loading?: boolean
 }
 
-// ── constants ──────────────────────────────────────────────────────────────
-const fmt  = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+const fmt = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
 const nowT = () => new Date().toLocaleTimeString('en-IN', { hour12: false })
 const rand = (min: number, max: number) => Math.random() * (max - min) + min
 
-const AGENTS  = ['Observer', 'Analyst', 'Risk Engine', 'Allocator', 'Executor']
+const AGENTS = ['Observer', 'Analyst', 'Risk Engine', 'Allocator', 'Executor']
 const SYMBOLS = ['NIFTY 50', 'BANKNIFTY', 'SENSEX', 'GOLD', 'USD/INR']
+const TIMEFRAMES = [
+  { label: '1m', value: '1min' }, { label: '5m', value: '5min' }, { label: '15m', value: '15min' },
+  { label: '30m', value: '30min' }, { label: '1h', value: '1h' }, { label: '4h', value: '4h' },
+  { label: '1D', value: '1day' }, { label: '1W', value: '1week' }, { label: '1M', value: '1month' },
+]
+
 const BASE: Record<string, number> = {
   'NIFTY 50': 22458, BANKNIFTY: 48210, SENSEX: 73820, GOLD: 72418, 'USD/INR': 83.42,
 }
 
+const SYMBOL_TO_ASSET: Record<string, string> = {
+  'NIFTY 50': 'nifty', 'BANKNIFTY': 'nifty', 'SENSEX': 'nifty', 'GOLD': 'gold', 'USD/INR': 'usd',
+}
+
 const NAV_LINKS = [
-  { label: 'Overview',    path: '/',            Icon: Gauge },
-  { label: 'Live Room',   path: '/live',         Icon: Activity },
-  { label: 'Markets',     path: '/markets',      Icon: TrendingUp },
-  { label: 'Agent Intel', path: '/agent',        Icon: Bot },
-  { label: 'Scenarios',   path: '/scenarios',    Icon: Layers3 },
-  { label: 'Risk',        path: '/risk',         Icon: ShieldCheck },
-  { label: 'Capital',     path: '/capital',      Icon: Wallet },
-  { label: 'Positions',   path: '/positions',    Icon: Target },
-  { label: 'History',     path: '/history',      Icon: History },
-  { label: 'Data',        path: '/data-sources', Icon: Database },
-  { label: 'Settings',    path: '/settings',     Icon: Settings2 },
+  { label: 'Overview', path: '/', Icon: Gauge },
+  { label: 'Live Room', path: '/live', Icon: Activity },
+  { label: 'Markets', path: '/markets', Icon: TrendingUp },
+  { label: 'Agent Intel', path: '/agent', Icon: Bot },
+  { label: 'Scenarios', path: '/scenarios', Icon: Layers3 },
+  { label: 'Risk', path: '/risk', Icon: ShieldCheck },
+  { label: 'Capital', path: '/capital', Icon: Wallet },
+  { label: 'Positions', path: '/positions', Icon: Target },
+  { label: 'History', path: '/history', Icon: History },
+  { label: 'Data', path: '/data-sources', Icon: Database },
+  { label: 'Settings', path: '/settings', Icon: Settings2 },
 ]
 
 const agentMessages: Record<string, string[]> = {
-  Observer:      ['Price crossed VWAP', 'Volume spike detected', 'Breadth expanding', 'ATR rising', 'New high formed', 'Support level tested'],
-  Analyst:       ['Bullish structure intact', 'RSI entering overbought', 'MACD crossover confirmed', 'BB squeeze detected', 'EMA20 > EMA50 confirmed'],
+  Observer: ['Price crossed VWAP', 'Volume spike detected', 'Breadth expanding', 'ATR rising', 'New high formed', 'Support level tested'],
+  Analyst: ['Bullish structure intact', 'RSI entering overbought', 'MACD crossover confirmed', 'BB squeeze detected', 'EMA20 > EMA50 confirmed'],
   'Risk Engine': ['VaR within threshold', 'Exposure limit checked', 'Stop-loss validated', 'Drawdown within bounds', 'Position size approved'],
-  Allocator:     ['Capital allocated ₹40,000', 'Opportunity score 81%', 'Risk-adjusted fit: HIGH', 'Reward ratio 2.1R', 'Allocation approved'],
-  Executor:      ['Order placed at market', 'Slippage 0.01%', 'Fill confirmed', 'Execution quality: GOOD', 'Order book depth checked'],
+  Allocator: ['Capital allocated ₹40,000', 'Opportunity score 81%', 'Risk-adjusted fit: HIGH', 'Reward ratio 2.1R', 'Allocation approved'],
+  Executor: ['Order placed at market', 'Slippage 0.01%', 'Fill confirmed', 'Execution quality: GOOD', 'Order book depth checked'],
 }
 const tones: AgentLog['tone'][] = ['blue', 'green', 'amber', 'green', 'green']
 
-// ── seed chart with deterministic indicators ─────────────────────────────────
-function buildCandles(symbol: string): Candle[] {
-  const base = BASE[symbol] || 22458
-  const prices: number[] = []
-  const vols:   number[] = []
-  const fixedBaseTime = 1710000000000
+const BACKEND = 'http://localhost:8000'
 
-  for (let i = 59; i >= 0; i--) {
-    const delta = Math.sin(i * 0.4) * 12 + Math.cos(i * 0.2) * 5
-    const v = base - 50 + (59 - i) * 1.2 + delta
-    prices.push(+v.toFixed(2))
-    vols.push(50 + Math.floor(Math.sin(i * 0.8) * 30))
-  }
-
-  const ema20arr = calcEMA(prices, 20)
-  const ema50arr = calcEMA(prices, 50)
-  const rsiArr   = calcRSI(prices, 14)
-  const { macd, signal, hist } = calcMACD(prices)
-  const { upper, lower, mid }  = calcBollinger(prices, 20)
-
-  return prices.map((p, i) => {
-    const t = new Date(fixedBaseTime + i * 10000)
-    const hours = String(t.getUTCHours()).padStart(2, '0')
-    const mins = String(t.getUTCMinutes()).padStart(2, '0')
-    const secs = String(t.getUTCSeconds()).padStart(2, '0')
-    const close = p
-    const open = i > 0 ? prices[i - 1] : +(p - 4).toFixed(2)
-    const high = +(Math.max(open, close) + Math.abs(Math.sin(i * 0.7)) * 8 + 1.5).toFixed(2)
-    const low = +(Math.min(open, close) - Math.abs(Math.cos(i * 0.7)) * 8 - 1.5).toFixed(2)
-
-    return {
-      time:       `${hours}:${mins}:${secs}`,
-      value:      p,
-      open,
-      high,
-      low,
-      close,
-      vwap:       +(p - 3.5).toFixed(2),
-      vol:        vols[i],
-      ema20:      ema20arr[i],
-      ema50:      ema50arr[i],
-      bbUpper:    upper[i],
-      bbLower:    lower[i],
-      bbMid:      mid[i],
-      rsi:        rsiArr[i],
-      macd:       macd[i],
-      macdSignal: signal[i],
-      macdHist:   hist[i],
-    }
-  })
-}
-
-// ── chart tooltip ──────────────────────────────────────────────────────────
-function ChartTooltip({ active, payload }: any) {
-  if (!active || !payload?.length) return null
-  const d = payload[0].payload as Candle
-  return (
-    <div className="border border-gray-200 bg-white px-3 py-2 text-xs shadow-xl rounded-md">
-      <p className="font-mono font-bold text-gray-800 mb-1">{d.time}</p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-        <span className="text-gray-400">Price</span><span className="font-mono font-semibold text-gray-900">{fmt(d.value)}</span>
-        <span className="text-gray-400">VWAP</span><span className="font-mono text-indigo-600">{fmt(d.vwap)}</span>
-        <span className="text-gray-400">EMA20</span><span className="font-mono text-orange-500">{fmt(d.ema20)}</span>
-        <span className="text-gray-400">EMA50</span><span className="font-mono text-purple-500">{fmt(d.ema50)}</span>
-        <span className="text-gray-400">BB Up</span><span className="font-mono text-gray-500">{fmt(d.bbUpper)}</span>
-        <span className="text-gray-400">BB Lo</span><span className="font-mono text-gray-500">{fmt(d.bbLower)}</span>
-        <span className="text-gray-400">RSI</span><span className={`font-mono font-semibold ${d.rsi > 70 ? 'text-rose-500' : d.rsi < 30 ? 'text-emerald-500' : 'text-gray-700'}`}>{d.rsi}</span>
-        <span className="text-gray-400">Vol</span><span className="font-mono text-gray-700">{d.vol}K</span>
-      </div>
-    </div>
-  )
-}
-
-// ── navbar ─────────────────────────────────────────────────────────────────
 function Navbar({ pulse }: { pulse: boolean }) {
   const [collapsed, setCollapsed] = useState(false)
-  const path = '/live'
   return (
     <aside className={`${collapsed ? 'w-14' : 'w-56'} hidden shrink-0 border-r border-gray-100 bg-white transition-all duration-200 md:flex flex-col`}>
       <div className="flex h-14 items-center justify-between border-b border-gray-100 px-3">
@@ -161,9 +84,9 @@ function Navbar({ pulse }: { pulse: boolean }) {
       </div>
       <nav className="flex flex-col gap-0.5 p-2 flex-1">
         {!collapsed && <p className="mb-1 px-2 font-mono text-[9px] uppercase tracking-[.18em] text-gray-300">Workspace</p>}
-        {NAV_LINKS.map(({ label, path: p, Icon }) => (
-          <a key={p} href={p} className={`flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors ${
-            p === path ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
+        {NAV_LINKS.map(({ label, path, Icon }) => (
+          <a key={path} href={path} className={`flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors ${
+            path === '/live' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
           }`}>
             <Icon className="size-3.5 shrink-0" />
             {!collapsed && label}
@@ -183,46 +106,6 @@ function Navbar({ pulse }: { pulse: boolean }) {
   )
 }
 
-// ── RSI panel ─────────────────────────────────────────────────────────────
-function RSIPanel({ data }: { data: Candle[] }) {
-  return (
-    <ResponsiveContainer width="100%" height={80}>
-      <ComposedChart data={data} margin={{ top: 2, right: 8, bottom: 0, left: 8 }}>
-        <CartesianGrid stroke="#f5f5f5" strokeDasharray="2 4" vertical={false} />
-        <XAxis dataKey="time" hide />
-        <YAxis domain={[0, 100]} tick={{ fontSize: 8, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={24} ticks={[30, 50, 70]} />
-        <Tooltip formatter={(v: any) => [v, 'RSI']} contentStyle={{ fontSize: 10 }} />
-        <ReferenceLine y={70} stroke="#f43f5e" strokeDasharray="3 3" strokeWidth={1} />
-        <ReferenceLine y={30} stroke="#10b981" strokeDasharray="3 3" strokeWidth={1} />
-        <Line type="monotone" dataKey="rsi" stroke="#8b5cf6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-      </ComposedChart>
-    </ResponsiveContainer>
-  )
-}
-
-// ── MACD panel ────────────────────────────────────────────────────────────
-function MACDPanel({ data }: { data: Candle[] }) {
-  return (
-    <ResponsiveContainer width="100%" height={80}>
-      <ComposedChart data={data} margin={{ top: 2, right: 8, bottom: 0, left: 8 }}>
-        <CartesianGrid stroke="#f5f5f5" strokeDasharray="2 4" vertical={false} />
-        <XAxis dataKey="time" hide />
-        <YAxis tick={{ fontSize: 8, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={32} />
-        <Tooltip contentStyle={{ fontSize: 10 }} />
-        <ReferenceLine y={0} stroke="#e5e7eb" strokeWidth={1} />
-        <Bar dataKey="macdHist" fill="#10b981" opacity={0.6} isAnimationActive={false}
-          label={false}
-          // negative bars red
-          // recharts doesn't support per-bar color easily, use a fixed color
-        />
-        <Line type="monotone" dataKey="macd" stroke="#3b82f6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-        <Line type="monotone" dataKey="macdSignal" stroke="#f97316" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-      </ComposedChart>
-    </ResponsiveContainer>
-  )
-}
-
-// ── AI suggestion card ────────────────────────────────────────────────────
 function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: () => void }) {
   if (!s) return (
     <div className="flex flex-col items-center justify-center gap-2 py-8 text-gray-300">
@@ -245,9 +128,7 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className={`rounded-md border px-3 py-1 font-mono text-sm font-bold ${actionColor}`}>
-          {s.action}
-        </span>
+        <span className={`rounded-md border px-3 py-1 font-mono text-sm font-bold ${actionColor}`}>{s.action}</span>
         <div className="flex items-center gap-2">
           <span className={`font-mono text-xs font-semibold ${trendColor}`}>{s.trend}</span>
           <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
@@ -256,14 +137,12 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
           }`}>{s.riskLevel} RISK</span>
         </div>
       </div>
-
       <div className="h-2 w-full rounded-full bg-gray-100">
         <div className={`h-2 rounded-full transition-all ${
           s.action === 'BUY' ? 'bg-emerald-400' : s.action === 'SELL' ? 'bg-rose-400' : 'bg-amber-400'
         }`} style={{ width: `${s.confidence}%` }} />
       </div>
       <p className="font-mono text-[10px] text-gray-400">Confidence: {s.confidence}%</p>
-
       <div className="grid grid-cols-3 gap-2">
         {[['Entry', fmt(s.entry), 'text-gray-700'], ['Target', fmt(s.target), 'text-emerald-600'], ['Stop', fmt(s.stopLoss), 'text-rose-600']].map(([l, v, c]) => (
           <div key={l} className="rounded-md border border-gray-100 p-2 text-center">
@@ -272,9 +151,7 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
           </div>
         ))}
       </div>
-
       <p className="text-[11px] leading-relaxed text-gray-500">{s.reasoning}</p>
-
       <button onClick={onRefresh} className="flex items-center justify-center gap-1.5 rounded-md border border-gray-200 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
         <RefreshCw className="size-3" /> Refresh analysis
       </button>
@@ -282,200 +159,150 @@ function SuggestionCard({ s, onRefresh }: { s: AISuggestion | null; onRefresh: (
   )
 }
 
-// ── main component ─────────────────────────────────────────────────────────
 export default function LiveTradingPage() {
-  const [symbol, setSymbol]       = useState('NIFTY 50')
-  const [candles, setCandles]     = useState<Candle[]>(() => buildCandles('NIFTY 50'))
-  const [orders, setOrders]       = useState<Order[]>([])
-  const [logs, setLogs]           = useState<AgentLog[]>([])
+  const [symbol, setSymbol] = useState('NIFTY 50')
+  const [timeframe, setTimeframe] = useState('1min')
+  const [candles, setCandles] = useState<OHLC[]>([])
+  const [loading, setLoading] = useState(true)
+  const [orders, setOrders] = useState<Order[]>([])
+  const [logs, setLogs] = useState<AgentLog[]>([])
   const [positions, setPositions] = useState<Position[]>([
-    { symbol: 'NIFTY 50',  qty: 24, entry: 22402, current: 22458 },
-    { symbol: 'BANKNIFTY', qty: 4,  entry: 48100, current: 48210 },
-    { symbol: 'GOLD',      qty: 2,  entry: 72080, current: 72418 },
+    { symbol: 'NIFTY 50', qty: 24, entry: 22402, current: 22458 },
+    { symbol: 'BANKNIFTY', qty: 4, entry: 48100, current: 48210 },
+    { symbol: 'GOLD', qty: 2, entry: 72080, current: 72418 },
   ])
-  const [agentStep, setAgentStep]     = useState(0)
-  const [pulse, setPulse]             = useState(false)
-  const [suggestion, setSuggestion]   = useState<AISuggestion | null>(null)
-  const [activeTab, setActiveTab]     = useState<'price'|'rsi'|'macd'>('price')
-  const [showIndicators, setShowIndicators] = useState({ ema20: true, ema50: true, bb: true, vwap: true })
-  const logId   = useRef(0)
+  const [agentStep, setAgentStep] = useState(0)
+  const [pulse, setPulse] = useState(false)
+  const [suggestion, setSuggestion] = useState<AISuggestion | null>(null)
+  const [activeTab, setActiveTab] = useState<'price' | 'rsi' | 'macd'>('price')
+  const [showIndicators, setShowIndicators] = useState({
+    ema20: true, ema50: true, bb: true, vwap: true,
+    utBot: false, fvg: false, volumeProfile: false, volume: true,
+  })
+  const logId = useRef(0)
   const orderId = useRef(100)
-  const aiTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const symbolToAssetKey: Record<string, string> = {
-    'NIFTY 50': 'nifty',
-    'BANKNIFTY': 'nifty',
-    'SENSEX': 'nifty',
-    'GOLD': 'gold',
-    'USD/INR': 'usd',
-  }
+  const assetKey = SYMBOL_TO_ASSET[symbol] || 'nifty'
 
-  // symbol change → rebuild candles & subscribe to real socket stream
+  const fetchCandles = useCallback(async (sym: string, tf: string) => {
+    setLoading(true)
+    const asset = SYMBOL_TO_ASSET[sym] || 'nifty'
+    try {
+      const res = await fetch(`${BACKEND}/api/market/${asset}/candles?timeframe=${tf}&limit=200`)
+      const data = await res.json()
+      if (Array.isArray(data) && data.length > 0) {
+        const ohlc: OHLC[] = data.map((c: any) => ({
+          time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0,
+        }))
+        setCandles(ohlc)
+      }
+    } catch {
+      // fallback: fetch history from existing endpoint
+      try {
+        const res = await fetch(`${BACKEND}/api/market/${asset}/history?limit=200`)
+        const data = await res.json()
+        if (Array.isArray(data)) {
+          const ohlc: OHLC[] = data.reverse().map((p: any, i: number) => ({
+            time: p.timestamp || new Date(Date.now() - (data.length - i) * 60000).toISOString(),
+            open: i > 0 ? data[i - 1].price : p.price,
+            high: p.price + rand(2, 8), low: p.price - rand(2, 8),
+            close: p.price, volume: p.volume || Math.floor(rand(50, 200)),
+          }))
+          setCandles(ohlc)
+        }
+      } catch {}
+    }
+    setLoading(false)
+  }, [])
+
   useEffect(() => {
-    setCandles(buildCandles(symbol))
+    fetchCandles(symbol, timeframe)
+  }, [symbol, timeframe, fetchCandles])
 
-    const assetKey = symbolToAssetKey[symbol] || 'nifty'
-    const socket = io('http://localhost:8000')
-
+  useEffect(() => {
+    if (!assetKey) return
+    const socket = io(BACKEND)
     socket.emit('subscribe', assetKey)
 
-    // Fetch initial history from backend
-    fetch(`http://localhost:8000/api/market/${assetKey}/history`)
-      .then(res => res.json())
-      .then(history => {
-        if (Array.isArray(history) && history.length > 0) {
-          const prices = history.map((h: any) => Number(h.price))
-          const ema20arr = calcEMA(prices, 20)
-          const ema50arr = calcEMA(prices, 50)
-          const rsiArr = calcRSI(prices, 14)
-          const { macd, signal, hist } = calcMACD(prices)
-          const { upper, lower, mid } = calcBollinger(prices, 20)
-
-          const loadedCandles: Candle[] = history.map((h: any, i: number) => ({
-            time: h.timestamp ? new Date(h.timestamp).toLocaleTimeString('en-IN', { hour12: false }) : nowT(),
-            value: Number(h.price),
-            vwap: +(Number(h.price) - rand(2, 6)).toFixed(2),
-            vol: Math.floor(rand(20, 90)),
-            ema20: ema20arr[i],
-            ema50: ema50arr[i],
-            bbUpper: upper[i],
-            bbLower: lower[i],
-            bbMid: mid[i],
-            rsi: rsiArr[i],
-            macd: macd[i],
-            macdSignal: signal[i],
-            macdHist: hist[i],
-          }))
-          setCandles(loadedCandles)
-        }
-      })
-      .catch(() => {})
-
-    // Handle real-time market updates from socket server
-    socket.on('market_update', (data: { asset?: string; price?: number; change_pct?: number; time?: string }) => {
-      if (data && data.price && (data.asset === assetKey || !data.asset)) {
-        const newPrice = Number(data.price)
-        const tickTime = data.time || nowT()
-
+    socket.on('market_update', (data: { asset?: string; price?: number; time?: string }) => {
+      if (data?.price && (data.asset === assetKey || !data.asset)) {
         setCandles(prev => {
           if (!prev.length) return prev
           const last = prev[prev.length - 1]
-          const isNewCandle = tickTime !== last.time
-
-          let newPrices: number[]
-          let updated: Candle[]
-
-          if (isNewCandle) {
-            newPrices = [...prev.map(c => c.value), newPrice].slice(-60)
-          } else {
-            newPrices = [...prev.map(c => c.value).slice(0, -1), newPrice]
-          }
-
-          const ema20arr = calcEMA(newPrices, 20)
-          const ema50arr = calcEMA(newPrices, 50)
-          const rsiArr = calcRSI(newPrices, 14)
-          const { macd, signal, hist } = calcMACD(newPrices)
-          const { upper, lower, mid } = calcBollinger(newPrices, 20)
+          const t = data.time || nowT()
+          const newPrice = Number(data.price)
+          const isNewCandle = t !== last.time
 
           if (isNewCandle) {
-            updated = prev.map((c, i) => ({
-              ...c,
-              ema20: ema20arr[i] || c.ema20,
-              ema50: ema50arr[i] || c.ema50,
-              bbUpper: upper[i] || c.bbUpper,
-              bbLower: lower[i] || c.bbLower,
-              bbMid: mid[i] || c.bbMid,
-              rsi: rsiArr[i] || c.rsi,
-              macd: macd[i] || c.macd,
-              macdSignal: signal[i] || c.macdSignal,
-              macdHist: hist[i] || c.macdHist,
-            }))
-            const lastIdx = newPrices.length - 1
-            updated.push({
-              time: tickTime,
-              value: newPrice,
-              vwap: +(newPrice - rand(2, 6)).toFixed(2),
-              vol: Math.floor(rand(20, 90)),
-              ema20: ema20arr[lastIdx],
-              ema50: ema50arr[lastIdx],
-              bbUpper: upper[lastIdx],
-              bbLower: lower[lastIdx],
-              bbMid: mid[lastIdx],
-              rsi: rsiArr[lastIdx],
-              macd: macd[lastIdx],
-              macdSignal: signal[lastIdx],
-              macdHist: hist[lastIdx],
-            })
-            updated = updated.slice(-60)
+            const newCandle: OHLC = {
+              time: t, open: last.close, high: Math.max(last.close, newPrice),
+              low: Math.min(last.close, newPrice), close: newPrice, volume: Math.floor(rand(20, 100)),
+            }
+            return [...prev.slice(-199), newCandle]
           } else {
-            updated = prev.map((c, i) => {
-              if (i === prev.length - 1) {
-                return {
-                  ...c,
-                  value: newPrice,
-                  ema20: ema20arr[i],
-                  ema50: ema50arr[i],
-                  bbUpper: upper[i],
-                  bbLower: lower[i],
-                  bbMid: mid[i],
-                  rsi: rsiArr[i],
-                  macd: macd[i],
-                  macdSignal: signal[i],
-                  macdHist: hist[i],
-                }
-              }
-              return {
-                ...c,
-                ema20: ema20arr[i] || c.ema20,
-                ema50: ema50arr[i] || c.ema50,
-                bbUpper: upper[i] || c.bbUpper,
-                bbLower: lower[i] || c.bbLower,
-                bbMid: mid[i] || c.bbMid,
-                rsi: rsiArr[i] || c.rsi,
-                macd: macd[i] || c.macd,
-                macdSignal: signal[i] || c.macdSignal,
-                macdHist: hist[i] || c.macdHist,
-              }
-            })
+            const updated = [...prev]
+            const idx = updated.length - 1
+            updated[idx] = {
+              ...updated[idx],
+              close: newPrice,
+              high: Math.max(updated[idx].high, newPrice),
+              low: Math.min(updated[idx].low, newPrice),
+            }
+            return updated
           }
-          return updated
         })
 
-        setPositions(prev =>
-          prev.map(p => (p.symbol === symbol ? { ...p, current: newPrice } : p))
-        )
+        setPositions(prev => prev.map(p => p.symbol === symbol ? { ...p, current: Number(data.price) } : p))
         setPulse(v => !v)
       }
     })
 
-    return () => {
-      socket.disconnect()
-    }
-  }, [symbol])
+    return () => { socket.disconnect() }
+  }, [assetKey, symbol])
 
-  // fetch AI suggestion
-  const fetchSuggestion = useCallback(async (c: Candle[]) => {
+  const fetchSuggestion = useCallback(async (c: OHLC[]) => {
     const last = c[c.length - 1]
     const prev = c[c.length - 2]
     if (!last || !prev) return
     setSuggestion(s => s ? { ...s, loading: true } : { action: 'HOLD', confidence: 0, entry: 0, target: 0, stopLoss: 0, reasoning: '', riskLevel: 'MEDIUM', trend: 'NEUTRAL', loading: true })
     try {
+      const closes = c.map(d => d.close)
+      const k12 = 2 / 13, k26 = 2 / 27
+      let ema12 = closes[0], ema26 = closes[0]
+      let rsi = 50, gains = 0, losses = 0
+      const ema20k = 2 / 21
+      let ema20 = closes[0]
+      for (let i = 0; i < closes.length; i++) {
+        ema12 = i === 0 ? closes[0] : closes[i] * k12 + ema12 * (1 - k12)
+        ema26 = i === 0 ? closes[0] : closes[i] * k26 + ema26 * (1 - k26)
+        ema20 = i === 0 ? closes[0] : closes[i] * ema20k + ema20 * (1 - ema20k)
+        if (i > 0) {
+          const d = closes[i] - closes[i - 1]
+          if (i <= 14) { if (d >= 0) gains += d; else losses -= d; if (i === 14) { gains /= 14; losses /= 14 } }
+          else { gains = (gains * 13 + Math.max(d, 0)) / 14; losses = (losses * 13 + Math.max(-d, 0)) / 14 }
+          if (i >= 14) rsi = +(100 - 100 / (1 + (losses === 0 ? 100 : gains / losses))).toFixed(2)
+        }
+      }
+      const macd = +(ema12 - ema26).toFixed(2)
+      const period = 20
+      let bbUpper = last.close, bbLower = last.close
+      if (closes.length >= period) {
+        const slice = closes.slice(-period)
+        const mean = slice.reduce((a, b) => a + b, 0) / period
+        const std = Math.sqrt(slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period)
+        bbUpper = +(mean + 2 * std).toFixed(2)
+        bbLower = +(mean - 2 * std).toFixed(2)
+      }
+      const vwap = +(closes.reduce((a, b) => a + b, 0) / closes.length).toFixed(2)
+
       const res = await fetch('/api/groq-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          symbol,
-          price:   last.value,
-          change:  (((last.value - prev.value) / prev.value) * 100).toFixed(2),
-          rsi:     last.rsi,
-          macd:    last.macd,
-          signal:  last.macdSignal,
-          ema20:   last.ema20,
-          ema50:   last.ema50,
-          bbUpper: last.bbUpper,
-          bbLower: last.bbLower,
-          vwap:    last.vwap,
-          volume:  last.vol,
+          symbol, price: last.close,
+          change: (((last.close - prev.close) / prev.close) * 100).toFixed(2),
+          rsi, macd, signal: macd, ema20, ema50: ema26,
+          bbUpper, bbLower, vwap, volume: last.volume,
         }),
       })
       const data = await res.json()
@@ -483,25 +310,23 @@ export default function LiveTradingPage() {
     } catch { setSuggestion(s => s ? { ...s, loading: false } : null) }
   }, [symbol])
 
-  // AI refresh every 30s
   useEffect(() => {
-    fetchSuggestion(candles)
-    const t = setInterval(() => fetchSuggestion(candles), 30000)
+    if (candles.length > 2) fetchSuggestion(candles)
+    const t = setInterval(() => { if (candles.length > 2) fetchSuggestion(candles) }, 30000)
     return () => clearInterval(t)
-  }, [symbol])
+  }, [symbol, candles.length])
 
-  // agent loop every 2.2s
   useEffect(() => {
     const t = setInterval(() => {
       setAgentStep(step => {
-        const idx   = step % AGENTS.length
+        const idx = step % AGENTS.length
         const agent = AGENTS[idx]
-        const msgs  = agentMessages[agent]
-        const msg   = msgs[Math.floor(Math.random() * msgs.length)]
+        const msgs = agentMessages[agent]
+        const msg = msgs[Math.floor(Math.random() * msgs.length)]
         setLogs(prev => [{ id: logId.current++, ts: nowT(), agent, msg, tone: tones[idx] }, ...prev.slice(0, 49)])
         if (agent === 'Executor') {
           setCandles(c => {
-            const price = c[c.length - 1]?.value ?? BASE[symbol]
+            const price = c[c.length - 1]?.close ?? BASE[symbol]
             const side: Order['side'] = Math.random() > 0.4 ? 'BUY' : 'SELL'
             setOrders(prev => [{
               id: `ORD-${orderId.current++}`, side, qty: Math.floor(rand(1, 5)),
@@ -518,17 +343,20 @@ export default function LiveTradingPage() {
   }, [symbol])
 
   const latest = candles[candles.length - 1]
-  const prev2  = candles[candles.length - 2]
-  const change = latest && prev2 ? latest.value - prev2.value : 0
-  const pct    = prev2 ? ((change / prev2.value) * 100).toFixed(2) : '0.00'
-  const up     = change >= 0
+  const prev2 = candles[candles.length - 2]
+  const change = latest && prev2 ? latest.close - prev2.close : 0
+  const pct = prev2 ? ((change / prev2.close) * 100).toFixed(2) : '0.00'
+  const up = change >= 0
+
+  const fvgZones = calcFairValueGap(candles)
+  const volumeProfile = calcVolumeProfile(candles)
+  const utBotSignals = calcUTBotAlerts(candles)
 
   return (
     <div className="flex min-h-screen bg-white text-gray-900">
       <Navbar pulse={pulse} />
 
       <div className="flex flex-1 flex-col min-w-0">
-        {/* ── topbar ── */}
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-gray-100 bg-white/95 px-4 backdrop-blur md:px-6">
           <div className="flex items-center gap-3">
             <span className="font-mono text-[10px] uppercase tracking-widest text-gray-400 md:hidden">AXIOM · Live</span>
@@ -540,7 +368,7 @@ export default function LiveTradingPage() {
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex items-center gap-4 font-mono text-xs">
               <span suppressHydrationWarning className={up ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
-                {symbol} {latest ? fmt(latest.value) : '—'} {up ? '▲' : '▼'} {Math.abs(+pct)}%
+                {symbol} {latest ? fmt(latest.close) : '—'} {up ? '▲' : '▼'} {Math.abs(+pct)}%
               </span>
             </div>
             <span suppressHydrationWarning className={`flex items-center gap-1.5 font-mono text-[10px] ${pulse ? 'text-emerald-500' : 'text-emerald-400'}`}>
@@ -552,7 +380,7 @@ export default function LiveTradingPage() {
         </header>
 
         <div className="flex-1 overflow-auto p-4 md:p-5">
-          {/* symbol tabs */}
+          {/* Symbol Tabs */}
           <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
             {SYMBOLS.map(s => (
               <button key={s} onClick={() => setSymbol(s)}
@@ -564,56 +392,59 @@ export default function LiveTradingPage() {
             ))}
           </div>
 
-          {/* price hero */}
+          {/* Timeframe Selector */}
+          <div className="mb-4 flex items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-gray-400">Timeframe</span>
+            <div className="flex gap-1 bg-gray-100 p-0.5 rounded-md">
+              {TIMEFRAMES.map(tf => (
+                <button key={tf.value} onClick={() => setTimeframe(tf.value)}
+                  className={`rounded px-2.5 py-1 font-mono text-[11px] font-medium transition-all ${
+                    timeframe === tf.value ? 'bg-white text-gray-900 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-900'
+                  }`}>
+                  {tf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Price Hero */}
           <div className="mb-4 flex flex-wrap items-end gap-5">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">{symbol}</p>
-              <p className="mt-0.5 font-mono text-3xl font-bold tracking-tight">{latest ? fmt(latest.value) : '—'}</p>
+              <p className="mt-0.5 font-mono text-3xl font-bold tracking-tight">{latest ? fmt(latest.close) : '—'}</p>
             </div>
             <div className={`flex items-center gap-1 text-base font-semibold ${up ? 'text-emerald-600' : 'text-rose-600'}`}>
               {up ? <ArrowUpRight className="size-4" /> : <ArrowDownRight className="size-4" />}
               {up ? '+' : ''}{change.toFixed(2)} ({up ? '+' : ''}{pct}%)
             </div>
-            <div className="flex flex-wrap gap-5 border-l border-gray-100 pl-5">
-              {[
-                ['VWAP',  latest ? fmt(latest.vwap)   : '—', 'text-indigo-600'],
-                ['EMA20', latest ? fmt(latest.ema20)  : '—', 'text-orange-500'],
-                ['EMA50', latest ? fmt(latest.ema50)  : '—', 'text-purple-500'],
-                ['RSI',   latest ? String(latest.rsi) : '—', latest && latest.rsi > 70 ? 'text-rose-500' : latest && latest.rsi < 30 ? 'text-emerald-500' : 'text-gray-700'],
-                ['Vol',   latest ? `${latest.vol}K`   : '—', 'text-gray-700'],
-              ].map(([l, v, c]) => (
-                <div key={l}>
-                  <p className="font-mono text-[9px] uppercase text-gray-400">{l}</p>
-                  <p className={`mt-0.5 font-mono text-sm font-semibold ${c}`}>{v}</p>
-                </div>
-              ))}
-            </div>
           </div>
 
-          {/* main grid */}
+          {/* Main Grid */}
           <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-            {/* left */}
             <div className="flex flex-col gap-4">
-
-              {/* professional trading chart card */}
+              {/* Chart Card */}
               <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-                {/* chart control toolbar */}
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
                   <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
-                    {(['price','rsi','macd'] as const).map(tab => (
+                    {(['price', 'rsi', 'macd'] as const).map(tab => (
                       <button key={tab} onClick={() => setActiveTab(tab)}
                         className={`rounded px-3 py-1 font-mono text-xs font-medium transition-all ${
                           activeTab === tab ? 'bg-white text-gray-900 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-900'
                         }`}>
-                        {tab === 'price' ? 'Candlestick Chart' : tab.toUpperCase()}
+                        {tab === 'price' ? 'Candlestick' : tab.toUpperCase()}
                       </button>
                     ))}
                   </div>
 
                   {activeTab === 'price' && (
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mr-1">Overlays:</span>
-                      {([['ema20','EMA 20','#f97316'],['ema50','EMA 50','#c084fc'],['bb','Bollinger Bands','#94a3b8'],['vwap','VWAP','#818cf8']] as const).map(([k, label, colorHex]) => {
+                      <span className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mr-1">Indicators:</span>
+                      {([
+                        ['ema20', 'EMA 20', '#f97316'], ['ema50', 'EMA 50', '#c084fc'],
+                        ['bb', 'Bollinger', '#94a3b8'], ['vwap', 'VWAP', '#818cf8'],
+                        ['utBot', 'UT Bot', '#e11d48'], ['fvg', 'FVG', '#10b981'],
+                        ['volumeProfile', 'Vol Profile', '#6366f1'], ['volume', 'Volume', '#6b7280'],
+                      ] as const).map(([k, label, colorHex]) => {
                         const active = showIndicators[k as keyof typeof showIndicators]
                         return (
                           <button key={k} onClick={() => setShowIndicators(s => ({ ...s, [k]: !s[k as keyof typeof s] }))}
@@ -630,40 +461,48 @@ export default function LiveTradingPage() {
 
                   <div className="flex items-center gap-2">
                     <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 font-mono text-[10px] text-emerald-600 border border-emerald-200/60 font-semibold">
-                      <Activity className="size-3 animate-pulse" /> WebSocket Live
+                      <Activity className="size-3 animate-pulse" /> Live
                     </span>
                   </div>
                 </div>
 
-                {/* chart canvas view */}
-                {activeTab === 'price' && (
-                  <TVPriceChart data={candles} showIndicators={showIndicators} />
-                )}
-                {activeTab === 'rsi' && (
+                {loading ? (
+                  <div className="flex h-[440px] items-center justify-center">
+                    <RefreshCw className="size-6 animate-spin text-gray-300" />
+                    <span className="ml-2 font-mono text-xs text-gray-400">Loading candles…</span>
+                  </div>
+                ) : activeTab === 'price' ? (
+                  <TVPriceChart
+                    data={candles}
+                    showIndicators={showIndicators}
+                    fvgZones={showIndicators.fvg ? fvgZones : undefined}
+                    volumeProfile={showIndicators.volumeProfile ? volumeProfile : undefined}
+                    utBotSignals={showIndicators.utBot ? utBotSignals : undefined}
+                  />
+                ) : activeTab === 'rsi' ? (
                   <div className="space-y-2">
                     <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
-                      RSI (14) Relative Strength Indicator — Overbought Zone &gt;70 · Oversold Zone &lt;30
+                      RSI (14) — Overbought &gt;70 · Oversold &lt;30
                     </p>
                     <TVRSIChart data={candles} />
                   </div>
-                )}
-                {activeTab === 'macd' && (
+                ) : (
                   <div className="space-y-2">
                     <p className="font-mono text-[10px] text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
-                      MACD (12,26,9) Moving Average Convergence Divergence — Blue: MACD · Orange: Signal · Green/Red: Histogram
+                      MACD (12,26,9) — Blue: MACD · Orange: Signal · Green/Red: Histogram
                     </p>
                     <TVMACDChart data={candles} />
                   </div>
                 )}
               </div>
 
-              {/* agent pipeline */}
+              {/* Agent Pipeline */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Agent Pipeline</p>
                 <div className="flex items-center">
                   {AGENTS.map((a, i) => {
                     const active = i === agentStep % AGENTS.length
-                    const done   = i < agentStep % AGENTS.length
+                    const done = i < agentStep % AGENTS.length
                     return (
                       <div key={a} className="flex flex-1 items-center">
                         <div className={`flex flex-1 flex-col items-center gap-1 rounded-md border px-1 py-2.5 text-center transition-all ${
@@ -681,14 +520,14 @@ export default function LiveTradingPage() {
                 </div>
               </div>
 
-              {/* order blotter */}
+              {/* Order Blotter */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Order Blotter · Live</p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-gray-100 font-mono text-[10px] uppercase tracking-wider text-gray-400">
-                        {['Order ID','Side','Qty','Price','Status','Time'].map(h => <th key={h} className="pb-2 pr-4 font-medium">{h}</th>)}
+                        {['Order ID', 'Side', 'Qty', 'Price', 'Status', 'Time'].map(h => <th key={h} className="pb-2 pr-4 font-medium">{h}</th>)}
                       </tr>
                     </thead>
                     <tbody>
@@ -714,29 +553,26 @@ export default function LiveTradingPage() {
               </div>
             </div>
 
-            {/* right col */}
+            {/* Right Column */}
             <div className="flex flex-col gap-4">
-
-              {/* AI suggestion */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Bot className="size-4 text-gray-400" />
                     <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Groq AI Suggestion</p>
                   </div>
-                  <span className="font-mono text-[9px] text-gray-300">Updates every 30s</span>
+                  <span className="font-mono text-[9px] text-gray-300">Every 30s</span>
                 </div>
                 <SuggestionCard s={suggestion} onRefresh={() => fetchSuggestion(candles)} />
               </div>
 
-              {/* positions */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Open Positions</p>
                 <div className="flex flex-col gap-2">
                   {positions.map(p => {
-                    const pnl    = (p.current - p.entry) * p.qty
+                    const pnl = (p.current - p.entry) * p.qty
                     const pnlPct = (((p.current - p.entry) / p.entry) * 100).toFixed(2)
-                    const pos    = pnl >= 0
+                    const pos = pnl >= 0
                     return (
                       <div key={p.symbol} className="rounded-md border border-gray-100 p-3">
                         <div className="flex items-center justify-between">
@@ -747,7 +583,7 @@ export default function LiveTradingPage() {
                           </span>
                         </div>
                         <div className="mt-2 grid grid-cols-3 gap-1 text-[10px]">
-                          {[['Entry', fmt(p.entry), ''], ['Now', fmt(p.current), pos ? 'text-emerald-600' : 'text-rose-600'], ['P&L%', `${pos?'+':''}${pnlPct}%`, pos ? 'text-emerald-600' : 'text-rose-600']].map(([l,v,c]) => (
+                          {[['Entry', fmt(p.entry), ''], ['Now', fmt(p.current), pos ? 'text-emerald-600' : 'text-rose-600'], ['P&L%', `${pos ? '+' : ''}${pnlPct}%`, pos ? 'text-emerald-600' : 'text-rose-600']].map(([l, v, c]) => (
                             <div key={l}><p className="text-gray-400">{l}</p><p className={`font-mono font-medium ${c}`}>{v}</p></div>
                           ))}
                         </div>
@@ -760,7 +596,6 @@ export default function LiveTradingPage() {
                 </div>
               </div>
 
-              {/* agent log */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">Agent Activity</p>
@@ -770,7 +605,7 @@ export default function LiveTradingPage() {
                   {logs.length === 0 && <p className="py-4 text-center font-mono text-[10px] text-gray-300">Agents initialising…</p>}
                   {logs.map(l => (
                     <div key={l.id} className="flex gap-2 rounded px-2 py-1 hover:bg-gray-50">
-                      <span className={`mt-1 size-1.5 shrink-0 rounded-full ${l.tone==='green'?'bg-emerald-400':l.tone==='amber'?'bg-amber-400':l.tone==='red'?'bg-rose-400':'bg-blue-400'}`} />
+                      <span className={`mt-1 size-1.5 shrink-0 rounded-full ${l.tone === 'green' ? 'bg-emerald-400' : l.tone === 'amber' ? 'bg-amber-400' : l.tone === 'red' ? 'bg-rose-400' : 'bg-blue-400'}`} />
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-[10px] font-semibold text-gray-700">{l.agent}</span>
@@ -783,11 +618,10 @@ export default function LiveTradingPage() {
                 </div>
               </div>
 
-              {/* risk */}
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-gray-400">Risk Summary</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {[['Daily P&L','+₹3,240','text-emerald-600'],['Exposure','44.8%','text-amber-600'],['VaR (1d)','1.8%','text-emerald-600'],['Status','ACTIVE','text-emerald-600']].map(([l,v,c]) => (
+                  {[['Daily P&L', '+₹3,240', 'text-emerald-600'], ['Exposure', '44.8%', 'text-amber-600'], ['VaR (1d)', '1.8%', 'text-emerald-600'], ['Status', 'ACTIVE', 'text-emerald-600']].map(([l, v, c]) => (
                     <div key={l} className="rounded-md border border-gray-100 p-2">
                       <p className="font-mono text-[9px] text-gray-400">{l}</p>
                       <p className={`mt-0.5 font-mono text-sm font-semibold ${c}`}>{v}</p>
@@ -798,7 +632,6 @@ export default function LiveTradingPage() {
             </div>
           </div>
 
-          {/* footer */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4 font-mono text-[10px] uppercase tracking-wider text-gray-300">
             <span className="flex items-center gap-2"><span className="size-1.5 rounded-full bg-emerald-400" /> All feeds connected</span>
             <span>Paper trading · No real capital at risk</span>

@@ -26,6 +26,15 @@ class MarketSnapshot(BaseModel):
     cached: bool = False
 
 
+class CandleOut(BaseModel):
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
 class HealthOut(BaseModel):
     status: str
     database: str
