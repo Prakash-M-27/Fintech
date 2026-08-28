@@ -9,23 +9,18 @@ from pipeline import price_handler
 
 logger = logging.getLogger(__name__)
 
-NEWS_URL = "https://newsapi.org/v2/top-headlines"
+from services.tavily_client import fetch_all_asset_news
+
 NEWS_POLL_INTERVAL = 300
 
 
 async def fetch_financial_news() -> list[dict] | None:
-    params = {
-        "category": "business",
-        "language": "en",
-        "pageSize": 20,
-        "apiKey": NEWS_API_KEY,
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(NEWS_URL, params=params)
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        return data.get("articles", [])
+    try:
+        articles = await fetch_all_asset_news()
+        return articles
+    except Exception as exc:
+        logger.error("Failed to fetch news from Tavily in news service: %s", exc)
+        return None
 
 
 async def poll_news_loop() -> None:
@@ -38,12 +33,13 @@ async def poll_news_loop() -> None:
             for a in articles:
                 title = (a.get("title") or "").lower()
                 if any(k in title for k in ("stock", "market", "nifty", "gold", "usd", "inr", "rupee", "trading", "equity", "sensex", "forex", "currency", "commodity", "inflation", "rate", "fed", "rbi")):
+                    source_name = a.get("source") if isinstance(a.get("source"), str) else (a.get("source") or {}).get("name", "Tavily")
                     filtered.append({
                         "title": a.get("title"),
-                        "source": a.get("source", {}).get("name"),
+                        "source": source_name,
                         "url": a.get("url"),
-                        "published_at": a.get("publishedAt"),
-                        "description": a.get("description"),
+                        "published_at": a.get("published_at") or a.get("publishedAt"),
+                        "description": a.get("raw_snippet") or a.get("description"),
                     })
             if filtered:
                 payload = {
