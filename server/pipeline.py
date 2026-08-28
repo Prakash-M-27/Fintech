@@ -59,6 +59,16 @@ async def price_handler(asset: str, payload: dict) -> None:
             }
             await cache_set(asset_cache_key(asset), snapshot)
             await emit_market_update("market_update", snapshot)
+
+            # ── Agent price-tick hook ─────────────────────────────────────
+            # Recomputes unrealized PnL and checks stop-loss / take-profit
+            # on any open paper position for this asset.
+            # Import is deferred to avoid circular import at module load time.
+            try:
+                from services.agent_loop import on_price_tick
+                await on_price_tick(asset, float(payload["price"]))
+            except Exception as exc:
+                logger.error("Agent on_price_tick error for %s: %s", asset, exc)
     else:
         await emit_market_update("news_update", payload)
         await emit_market_update("market_update", payload)
