@@ -13,6 +13,7 @@ from services.news import poll_news_loop
 from services.nifty import poll_nifty_loop
 from services.twelvedata import connect_twelvedata
 from services.agent_loop import run_agent_loop
+from services.synthetic_price import run_synthetic_price_loop
 from socket_manager import sio, register_socket_events
 from pipeline import warm_up_from_db
 from routers.market import router as market_router
@@ -42,9 +43,11 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(poll_news_loop())
     # Background task 5: News Sentinel Agent (news → classify → decide → paper trade)
     asyncio.create_task(run_agent_loop())
+    # Background task 6: Synthetic live prices for nifty/banknifty/sensex (1.5s ticks)
+    asyncio.create_task(run_synthetic_price_loop())
 
     await warm_up_from_db()
-    logger.info("Axiom backend started — 5 background tasks running")
+    logger.info("Axiom backend started — 6 background tasks running")
     yield
     await close_redis()
 

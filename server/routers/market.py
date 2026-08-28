@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
+import json
+import os
 
 from database import get_db
 from models import NiftyPrice, GoldPrice, USDPrice, PriceModel
@@ -10,6 +12,8 @@ from services.cache import asset_cache_key, cache_get, cache_set, CACHE_TTL
 from config import TWELVEDATA_API_KEY
 
 router = APIRouter(prefix="/api", tags=["market"])
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 MODEL_MAP = {
     "nifty": NiftyPrice,
@@ -74,12 +78,28 @@ async def get_all_markets(db: AsyncSession = Depends(get_db)):
 
 
 SYMBOL_MAP = {
-    "nifty": "NIFTY",
     "gold": "XAU/USD",
     "usd": "USD/INR",
 }
 
+SYNTHETIC_ASSETS = {"nifty", "banknifty", "sensex"}
+
 VALID_TIMEFRAMES = ["1min", "5min", "15min", "30min", "1h", "4h", "1day", "1week", "1month"]
+
+
+def _load_synthetic_candles(asset: str, timeframe: str) -> list[CandleOut]:
+    filepath = os.path.join(DATA_DIR, f"{asset}_{timeframe}.json")
+    if not os.path.exists(filepath):
+        raise HTTPException(404, detail=f"No synthetic data for {asset}/{timeframe}. Run generate_synthetic_data.py first.")
+    with open(filepath, "r") as f:
+        data = json.load(f)
+    return [
+        CandleOut(
+            time=c["time"], open=c["open"], high=c["high"],
+            low=c["low"], close=c["close"], volume=c["volume"],
+        )
+        for c in data
+    ]
 
 
 @router.get("/market/{asset}/candles", response_model=list[CandleOut])
@@ -89,11 +109,16 @@ async def get_candles(
     limit: int = Query(200, description="Number of candles"),
 ):
     asset = asset.lower()
-    symbol = SYMBOL_MAP.get(asset)
-    if not symbol:
-        raise HTTPException(400, detail="Valid assets: nifty, gold, usd")
     if timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(400, detail=f"Valid timeframes: {', '.join(VALID_TIMEFRAMES)}")
+
+    if asset in SYNTHETIC_ASSETS:
+        candles = _load_synthetic_candles(asset, timeframe)
+        return candles[:limit]
+
+    symbol = SYMBOL_MAP.get(asset)
+    if not symbol:
+        raise HTTPException(400, detail="Valid assets: nifty, banknifty, sensex, gold, usd")
 
     limit = max(1, min(limit, 500))
     cache_key = f"candles:{asset}:{timeframe}:{limit}"

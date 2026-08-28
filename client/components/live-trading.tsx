@@ -33,11 +33,11 @@ const TIMEFRAMES = [
 ]
 
 const BASE: Record<string, number> = {
-  'NIFTY 50': 22458, BANKNIFTY: 48210, SENSEX: 73820, GOLD: 72418, 'USD/INR': 83.42,
+  'NIFTY 50': 26800, 'BANKNIFTY': 54000, 'SENSEX': 88500, 'GOLD': 72418, 'USD/INR': 83.42,
 }
 
 const SYMBOL_TO_ASSET: Record<string, string> = {
-  'NIFTY 50': 'nifty', 'BANKNIFTY': 'nifty', 'SENSEX': 'nifty', 'GOLD': 'gold', 'USD/INR': 'usd',
+  'NIFTY 50': 'nifty', 'BANKNIFTY': 'banknifty', 'SENSEX': 'sensex', 'GOLD': 'gold', 'USD/INR': 'usd',
 }
 
 const NAV_LINKS = [
@@ -167,14 +167,15 @@ export default function LiveTradingPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [logs, setLogs] = useState<AgentLog[]>([])
   const [positions, setPositions] = useState<Position[]>([
-    { symbol: 'NIFTY 50', qty: 24, entry: 22402, current: 22458 },
-    { symbol: 'BANKNIFTY', qty: 4, entry: 48100, current: 48210 },
+    { symbol: 'NIFTY 50', qty: 24, entry: 26750, current: 26800 },
+    { symbol: 'BANKNIFTY', qty: 4, entry: 53900, current: 54000 },
     { symbol: 'GOLD', qty: 2, entry: 72080, current: 72418 },
   ])
   const [agentStep, setAgentStep] = useState(0)
   const [pulse, setPulse] = useState(false)
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null)
   const [activeTab, setActiveTab] = useState<'price' | 'rsi' | 'macd'>('price')
+  const [livePrice, setLivePrice] = useState<number | null>(null)
   const [showIndicators, setShowIndicators] = useState({
     ema20: true, ema50: true, bb: true, vwap: true,
     utBot: false, fvg: false, volumeProfile: false, volume: true,
@@ -186,6 +187,7 @@ export default function LiveTradingPage() {
 
   const fetchCandles = useCallback(async (sym: string, tf: string) => {
     setLoading(true)
+    setLivePrice(null)
     const asset = SYMBOL_TO_ASSET[sym] || 'nifty'
     try {
       const res = await fetch(`${BACKEND}/api/market/${asset}/candles?timeframe=${tf}&limit=200`)
@@ -219,6 +221,41 @@ export default function LiveTradingPage() {
     fetchCandles(symbol, timeframe)
   }, [symbol, timeframe, fetchCandles])
 
+  // ── Client-side live tick generator (1.5s interval) ─────────────────────
+  useEffect(() => {
+    if (!candles.length) return
+    const cfg = { vol: 0.0006, mr: 0.003 }
+    const tick = setInterval(() => {
+      setCandles(prev => {
+        if (!prev.length) return prev
+        const last = prev[prev.length - 1]
+        const mid = (BASE[symbol] || 26800)
+        const drift = cfg.mr * (mid - last.close) / mid
+        const noise = (Math.random() - 0.5) * 2 * cfg.vol
+        const pct = drift + noise
+        const newPrice = +(last.close * (1 + pct)).toFixed(2)
+        const updated = [...prev]
+        updated[prev.length - 1] = {
+          ...last,
+          close: newPrice,
+          high: Math.max(last.high, newPrice),
+          low: Math.min(last.low, newPrice),
+        }
+        return updated.slice(-200)
+      })
+      setLivePrice(p => {
+        const cfg2 = { vol: 0.0006, mr: 0.003 }
+        const base = BASE[symbol] || 26800
+        const current = p ?? base
+        const drift = cfg2.mr * (base - current) / base
+        const noise = (Math.random() - 0.5) * 2 * cfg2.vol
+        return +(current * (1 + drift + noise)).toFixed(2)
+      })
+      setPulse(v => !v)
+    }, 1500)
+    return () => clearInterval(tick)
+  }, [symbol, timeframe, candles.length])
+
   useEffect(() => {
     if (!assetKey) return
     const socket = io(BACKEND)
@@ -226,33 +263,22 @@ export default function LiveTradingPage() {
 
     socket.on('market_update', (data: { asset?: string; price?: number; time?: string }) => {
       if (data?.price && (data.asset === assetKey || !data.asset)) {
+        const newPrice = Number(data.price)
+        setLivePrice(newPrice)
         setCandles(prev => {
           if (!prev.length) return prev
-          const last = prev[prev.length - 1]
-          const t = data.time || nowT()
-          const newPrice = Number(data.price)
-          const isNewCandle = t !== last.time
-
-          if (isNewCandle) {
-            const newCandle: OHLC = {
-              time: t, open: last.close, high: Math.max(last.close, newPrice),
-              low: Math.min(last.close, newPrice), close: newPrice, volume: Math.floor(rand(20, 100)),
-            }
-            return [...prev.slice(-199), newCandle]
-          } else {
-            const updated = [...prev]
-            const idx = updated.length - 1
-            updated[idx] = {
-              ...updated[idx],
-              close: newPrice,
-              high: Math.max(updated[idx].high, newPrice),
-              low: Math.min(updated[idx].low, newPrice),
-            }
-            return updated
+          const updated = [...prev]
+          const idx = updated.length - 1
+          updated[idx] = {
+            ...updated[idx],
+            close: newPrice,
+            high: Math.max(updated[idx].high, newPrice),
+            low: Math.min(updated[idx].low, newPrice),
           }
+          return updated
         })
 
-        setPositions(prev => prev.map(p => p.symbol === symbol ? { ...p, current: Number(data.price) } : p))
+        setPositions(prev => prev.map(p => p.symbol === symbol ? { ...p, current: newPrice } : p))
         setPulse(v => !v)
       }
     })
@@ -344,7 +370,8 @@ export default function LiveTradingPage() {
 
   const latest = candles[candles.length - 1]
   const prev2 = candles[candles.length - 2]
-  const change = latest && prev2 ? latest.close - prev2.close : 0
+  const displayPrice = livePrice ?? latest?.close ?? 0
+  const change = latest && prev2 ? displayPrice - prev2.close : 0
   const pct = prev2 ? ((change / prev2.close) * 100).toFixed(2) : '0.00'
   const up = change >= 0
 
@@ -368,7 +395,7 @@ export default function LiveTradingPage() {
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex items-center gap-4 font-mono text-xs">
               <span suppressHydrationWarning className={up ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
-                {symbol} {latest ? fmt(latest.close) : '—'} {up ? '▲' : '▼'} {Math.abs(+pct)}%
+                {symbol} {displayPrice ? fmt(displayPrice) : '—'} {up ? '▲' : '▼'} {Math.abs(+pct)}%
               </span>
             </div>
             <span suppressHydrationWarning className={`flex items-center gap-1.5 font-mono text-[10px] ${pulse ? 'text-emerald-500' : 'text-emerald-400'}`}>
@@ -411,7 +438,7 @@ export default function LiveTradingPage() {
           <div className="mb-4 flex flex-wrap items-end gap-5">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-widest text-gray-400">{symbol}</p>
-              <p className="mt-0.5 font-mono text-3xl font-bold tracking-tight">{latest ? fmt(latest.close) : '—'}</p>
+              <p className="mt-0.5 font-mono text-3xl font-bold tracking-tight">{displayPrice ? fmt(displayPrice) : '—'}</p>
             </div>
             <div className={`flex items-center gap-1 text-base font-semibold ${up ? 'text-emerald-600' : 'text-rose-600'}`}>
               {up ? <ArrowUpRight className="size-4" /> : <ArrowDownRight className="size-4" />}
