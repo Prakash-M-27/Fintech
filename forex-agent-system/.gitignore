@@ -1,0 +1,26 @@
+# Local Python environment / dependencies (installed, not vendored)
+.deps/
+.venv/
+venv/
+
+# Environment / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Databases / local artifacts
+*.db
+*.sqlite3
+backtest/data/historical_*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
