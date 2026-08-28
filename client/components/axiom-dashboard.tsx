@@ -24,6 +24,7 @@ import {
   PanelLeft,
   Pause,
   Play,
+  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -50,6 +51,7 @@ import { assets, chartData, events, news, scenarios } from "@/lib/axiom-data";
 import { getMarketStatus, getOverallMarketStatus, MarketStatusInfo } from "@/lib/market-status";
 import { io } from "socket.io-client";
 import { TVOverviewChart } from '@/components/tv-chart';
+import ForexDashboard from '@/components/forex-dashboard';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
@@ -57,6 +59,7 @@ const nav = [
   ["Overview", "/", Gauge],
   ["Live Trading", "/live", Activity],
   ["Markets", "/markets", TrendingUp],
+  ["Forex Agent", "/forex", Zap],
   ["Agent Intelligence", "/agent", Bot],
   ["Scenarios", "/scenarios", Layers3],
   ["Risk Center", "/risk", ShieldCheck],
@@ -81,6 +84,10 @@ const titles: Record<string, [string, string]> = {
   "/agent": [
     "Agent Intelligence",
     "Understand how market evidence becomes risk-aware actions.",
+  ],
+  "/forex": [
+    "Forex Agent",
+    "forex-agent-system pipeline: data \u2192 analysis \u2192 strategy \u2192 risk \u2192 execution.",
   ],
   "/scenarios": [
     "Scenario Readiness",
@@ -793,6 +800,7 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
                 </button>
               </div>
             </div>
+            {route === "/forex" && <ForexDashboard />}
             {route === "/" && (
               <>
                 <div className="mb-6 flex overflow-x-auto border-y border-border">
@@ -1573,147 +1581,6 @@ export default function AxiomDashboard({ route = "/" }: { route?: string }) {
         </div>
       )}
     </div>
-  );
-
-}
-
-export { AxiomDashboard };
-"Risk",
-  "Notifications",
-  "Agent",
-  "Appearance",
-                  ].map((n) => (
-    <div key={n} className="border border-border bg-card p-4">
-      <div className="flex justify-between">
-        <p className="text-sm font-semibold">{n}</p>
-        <span className="font-mono text-[10px] text-emerald-500">
-          Configured
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Manage preferences
-      </p>
-      <button className="mt-4 text-xs text-primary">
-        Configure <ChevronRight className="inline size-3" />
-      </button>
-    </div>
-  ))}
-                </div >
-              </Section >
-            )}
-{/* The old Selected asset section was moved and redesigned. */ }
-<div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-  <span className="flex items-center gap-2">
-    <span className="size-1.5 rounded-full bg-emerald-500" /> Data
-    feed connected · 3 sources
-  </span>
-  <span suppressHydrationWarning>Last sync {new Date().toLocaleTimeString('en-IN', { hour12: false })} IST</span>
-  <span>Paper trading mode</span>
-</div>
-          </div >
-        </main >
-      </div >
-  { search && (
-    <div
-      className="fixed inset-0 z-40 bg-foreground/20 p-4 pt-24"
-      onClick={() => setSearch(false)}
-    >
-      <div
-        className="mx-auto max-w-lg border border-border bg-popover shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-3 border-b border-border p-4">
-          <Search className="size-4 text-muted-foreground" />
-          <input
-            autoFocus
-            placeholder="Search assets, decisions, scenarios..."
-            className="flex-1 bg-transparent text-sm outline-none"
-          />
-          <button onClick={() => setSearch(false)}>
-            <X className="size-4" />
-          </button>
-        </div>
-        <div className="p-3">
-          {[
-            "NIFTY 50",
-            "Decision #144",
-            "Liquidity breakdown",
-            "Risk center",
-          ].map((x) => (
-            <button
-              key={x}
-              onClick={() => setSearch(false)}
-              className="flex w-full items-center gap-3 p-2 text-left text-xs hover:bg-muted"
-            >
-              <Command className="size-3.5 text-muted-foreground" />
-              {x}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  )}
-{
-  notifications && (
-    <div className="fixed right-4 top-16 z-40 w-80 border border-border bg-popover p-4 shadow-xl">
-      <div className="flex justify-between text-sm font-semibold">
-        Notifications{" "}
-        <button onClick={() => setNotifications(false)}>
-          <X className="size-4" />
-        </button>
-      </div>
-      <div className="mt-4 border-t border-border pt-3 text-xs">
-        <span className="text-amber-500">Decision changed</span>
-        <p className="mt-1 text-muted-foreground">
-          NIFTY HOLD → WATCH · 27 sec ago
-        </p>
-        <p className="mt-2">Liquidity deteriorated.</p>
-      </div>
-    </div>
-  )
-}
-{
-  stop && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/25 p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        className="w-full max-w-sm border border-border bg-popover p-5 shadow-xl"
-      >
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-1 size-5 text-destructive" />
-          <div>
-            <h2 className="text-sm font-semibold">
-              Emergency stop simulation?
-            </h2>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              This pauses simulated execution while observation and analysis
-              continue.
-            </p>
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            onClick={() => setStop(false)}
-            className="border border-border px-3 py-2 text-xs"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => {
-              setStream(false);
-              setStop(false);
-            }}
-            className="bg-destructive px-3 py-2 text-xs text-destructive-foreground"
-          >
-            Confirm stop
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-    </div >
   );
 
 }
